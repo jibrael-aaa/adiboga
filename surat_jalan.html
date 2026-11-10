@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cetak Surat Jalan</title>
+    <style>
+        body {
+            font-family: Arial;
+            margin: 20px;
+            color: #1e293b;
+        }
+        .sj-container {
+            max-width: 800px;
+            margin: 0 auto;
+            border: 1px solid #cbd5e1;
+            padding: 24px;
+            border-radius: 8px;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid #0f172a;
+            padding-bottom: 12px;
+            margin-bottom: 20px;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 22px;
+            color: #0f172a;
+        }
+        .info-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+        .info-grid div p {
+            margin: 4px 0;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 30px;
+        }
+        th, td {
+            border: 1px solid #cbd5e1;
+            padding: 10px;
+            text-align: left;
+            font-size: 13px;
+        }
+        th {
+            background-color: #f1f5f9;
+        }
+        .ttd-section {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 40px;
+            text-align: center;
+        }
+        .ttd-box {
+            width: 30%;
+        }
+        .ttd-line {
+            margin-top: 60px;
+            border-bottom: 1px solid #000;
+        }
+        @media print {
+            .no-print {
+                display: none;
+            }
+            .sj-container {
+                border: none;
+                padding: 0;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="no-print" style="max-width: 800px; margin: 0 auto 15px auto; text-align: right;">
+        <button onclick="window.print()" style="padding: 8px 16px; background: #16a34a; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">Cetak Dokumen</button>
+    </div>
+
+    <div class="sj-container">
+        <div class="header">
+            <div>
+                <h1 id="txtTitle">BERITA SERAH TERIMA BARANG</h1>
+                <small style="color: #64748b;">WMS Adiboga System</small>
+            </div>
+            <div style="text-align: right;">
+                <p style="margin: 0; font-weight: bold; font-size: 16px;" id="txtNoSJ">SJ-00000</p>
+                <small id="txtTanggal">Tanggal: -</small>
+            </div>
+        </div>
+
+        <div class="info-grid">
+            <div>
+                <p><b>Lokasi Gudang Asal:</b> <span id="txtGudangAsal">-</span></p>
+                <p><b>Gudang Tujuan:</b> <span id="txtGudangTujuan">-</span></p>
+            </div>
+            <div>
+                <p><b>Ekspedisi / Kurir:</b> <span id="txtKurir">-</span></p>
+                <p><b>Tipe Transaksi:</b> <span id="txtTipe">-</span></p>
+            </div>
+        </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th style="width: 5%;">No</th>
+                    <th style="width: 20%;">Kode SKU</th>
+                    <th style="width: 40%;">Nama Barang</th>
+                    <th style="width: 20%;">Kode Produksi</th>
+                    <th style="width: 15%; text-align: center;">Qty</th>
+                </tr>
+            </thead>
+            <tbody id="tabelSJItems"></tbody>
+        </table>
+
+        <div class="ttd-section">
+            <div class="ttd-box">
+                <p>Dibuat Oleh</p>
+                <div class="ttd-line"></div>
+            </div>
+            <div class="ttd-box">
+                <p>Diketahui Oleh</p>
+                <div class="ttd-line"></div>
+            </div>
+            <div class="ttd-box">
+                <p>Diterima Oleh</p>
+                <div class="ttd-line"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function escHtml(v) {
+            return String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+        }
+
+        window.onload = async function() {
+            const token = new URLSearchParams(window.location.search).get('token') || '';
+            let data = null;
+            try {
+                const res = await fetch(`api.php?action=get_print&token=${encodeURIComponent(token)}`, { credentials: 'same-origin' });
+                const body = await res.json();
+                if (body.status === 'success') data = body.payload;
+            } catch (err) { data = null; }
+
+            if (!data) {
+                alert("Data Surat Jalan tidak ditemukan atau sudah kedaluwarsa. Silakan cetak ulang dari aplikasi.");
+                return;
+            }
+
+            document.getElementById("txtTitle").textContent = data.title || "BERITA SERAH TERIMA BARANG";
+            document.getElementById("txtNoSJ").textContent = data.no_sj || "-";
+            document.getElementById("txtTanggal").textContent = "Tanggal: " + (data.tanggal || "-");
+
+            // Pengamanan string nama gudang
+            const gudangAsalName = typeof data.gudang === 'object' ? data.gudang.nama : data.gudang;
+            const gudangTujuanName = typeof data.gudang_tujuan === 'object' ? data.gudang_tujuan.nama : data.gudang_tujuan;
+
+            document.getElementById("txtGudangAsal").textContent = gudangAsalName || "-";
+            document.getElementById("txtGudangTujuan").textContent = gudangTujuanName || "-";
+            document.getElementById("txtKurir").textContent = data.pengirim_kurir || "-";
+            document.getElementById("txtTipe").textContent = data.tipe || "-";
+
+            const tbody = document.getElementById("tabelSJItems");
+            tbody.innerHTML = "";
+
+            if (data.items && data.items.length > 0) {
+                data.items.forEach((item, index) => {
+                    tbody.innerHTML += `
+                        <tr>
+                            <td style="text-align: center;">${index + 1}</td>
+                            <td><code>${escHtml(item.kode)}</code></td>
+                            <td><b>${escHtml(item.nama_barang)}</b></td>
+                            <td>${escHtml(item.kode_produksi || '-')}</td>
+                            <td style="text-align: center;"><b>${escHtml(item.qty)}</b></td>
+                        </tr>
+                    `;
+                });
+            } else {
+                tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;">Tidak ada rincian barang.</td></tr>`;
+            }
+        };
+    </script>
+</body>
+</html>

@@ -1,0 +1,1676 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Warehouse System - Standalone</title>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+    <link rel="stylesheet" href="style.css?v=20261111">
+    <link rel="stylesheet" href="admin.css?v=20261111">
+</head>
+<body>
+
+  <!-- LOGIN SCREEN -->
+  <div id="loginContainer">
+    <div class="login-card">
+      <h1>WMS Adiboga</h1>
+      <p>Silakan login untuk mengakses sistem pergudangan</p>
+      
+      <div class="login-field">
+        <label for="loginUsername">Username</label>
+        <input type="text" id="loginUsername" placeholder="Masukkan username">
+      </div>
+      
+      <div class="login-field">
+        <label for="loginPassword">Password</label>
+        <input type="password" id="loginPassword" placeholder="Masukkan password">
+      </div>
+      
+      <button id="btnLogin" onclick="handleLogin()">Login</button>
+      
+      <div class="cred-hint">
+        <b>Default Login:</b><br>
+        Superadmin: admin / admin123<br>
+        User Staff: user / user123
+      </div>
+    </div>
+  </div>
+
+  <!-- MAIN APPLICATION -->
+  <div id="appContainer">
+    <header class="app-header">
+      <div class="brand-title">WMS Adiboga <span>(Standalone System)</span></div>
+      <div class="header-right">
+        <div class="user-info">Login sebagai: <b id="txtLoggedInUser">User</b> (<span id="txtLoggedInRole">Role</span>)</div>
+        <button class="btn-logout" onclick="handleLogout()">Logout</button>
+      </div>
+    </header>
+
+    <nav class="main-nav" id="mainNav">
+      <button id="navDashboard" onclick="openTab('dashboardView', 'Dashboard')" class="active-nav">Dashboard</button>
+      <button id="navMasterData" onclick="openTab('masterBarangView', 'Master Data')">Master Data</button>
+      <button id="navInputTrans" onclick="openTab('inputView', 'Input Transaksi')">Input Transaksi</button>
+      <button id="navManufaktur" onclick="openTab('manufakturView', 'Modul Manufaktur')">Modul Manufaktur</button>
+      <button id="navPdaScan" onclick="openTab('pdaView', 'Hardware Scan PDA')">Hardware Scan PDA</button>
+      <button id="navRekon" onclick="openTab('rekonView', 'Rekonsiliasi E-Commerce')">Rekonsiliasi E-Commerce</button>
+      <button id="navRekonRetur" onclick="openTab('rekonReturView', 'Rekonsiliasi Retur')">Rekonsiliasi Retur</button>
+      <button id="navCekStok" onclick="openTab('cekStokView', 'Cek Stok & EAN-13')">Cek Stok & Lokasi</button>
+      <button id="navLaporanStok" onclick="openTab('laporanStokView', 'Laporan Stok & Opname')">Laporan Stok & Opname</button>
+    </nav>
+
+    <div class="accurate-tab-bar" id="tabBar">
+      <div class="tab-item active" data-target="dashboardView">Dashboard</div>
+    </div>
+
+    <div class="tab-content-container">
+
+      <!-- TAB 1: DASHBOARD -->
+      <div id="dashboardView" class="tab-page active">
+        <div class="admin-greeting">
+          <div>
+            <h2 id="adminGreeting">Selamat Datang!</h2>
+            <p>Dashboard</p>
+          </div>
+        </div>
+        <div class="stats">
+          <div class="stat">Total Barang Masuk<b id="totalMasuk">0</b></div>
+          <div class="stat">Total Barang Keluar<b id="totalKeluar">0</b></div>
+          <div class="stat">Sisa Stok Total<b id="totalStok">0</b></div>
+          <div class="stat">Jenis SKU<b id="jenisProduk">0</b></div>
+        </div>
+
+        <div class="card">
+          <h2>Riwayat Transaksi Barang</h2>
+          
+          <div class="export-bar" style="margin-bottom: 12px;">
+            <div class="filter-controls">
+              <input id="search" placeholder="Cari kode, kat. produk, kat. masuk, tujuan..." oninput="renderDashboard(1)" style="min-width:240px;">
+              <label style="font-size:13px; margin:0;">Filter Gudang:</label>
+              <select id="filterGudangDashboard" onchange="renderDashboard(1)" style="width: auto;"></select>
+            </div>
+          </div>
+
+          <div class="export-bar">
+            <div class="filter-controls">
+              <label style="font-size:13px; margin:0;">Filter Export Excel:</label>
+              <select id="modeExport" onchange="toggleExportDateRange()" style="width: auto;">
+                <option value="semua">Semua Transaksi</option>
+                <option value="custom" selected>Custom Tanggal Transaksi</option>
+              </select>
+              <div id="exportDateGroup" style="display: flex; align-items: center; gap: 5px;">
+                <label style="margin:0;">Dari:</label>
+                <input type="date" id="tglExportAwal" style="width: auto;" onchange="renderDashboard(1)">
+                <label style="margin:0;">Sampai:</label>
+                <input type="date" id="tglExportAkhir" style="width: auto;" onchange="renderDashboard(1)">
+              </div>
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <button data-feature="export" class="btn-success" onclick="exportToExcel()">Export Report Excel</button>
+              <button class="btn-danger superadmin-only" onclick="bukaModalHapusSemuaData()">Hapus Semua Data</button>
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>No</th>
+                  <th>Tipe</th>
+                  <th>Gudang</th>
+                  <th>Kode SKU</th>
+                  <th>Nama Barang</th>
+                  <th>Kode Produksi</th>
+                  <th>Kategori Produk</th>
+                  <th>Kategori / Tujuan</th>
+                  <th>Qty</th>
+                  <th>Tanggal</th>
+                  <th class="text-center">Aksi</th>
+                </tr>
+              </thead>
+              <tbody id="tabelDashboard"></tbody>
+            </table>
+          </div>
+
+          <div class="pagination-bar">
+            <div class="pagination-info-group">
+              <label style="font-size:13px; margin:0;">Per halaman:</label>
+              <select id="pageSizeSelect" style="width: auto; padding: 4px;" onchange="renderDashboard(1)">
+                <option value="10">10</option>
+                <option value="25" selected>25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+              </select>
+              <span id="paginationInfo">Menampilkan 0 - 0 dari 0 data</span>
+            </div>
+            <div class="pagination-controls">
+              <button id="btnPrevPage" class="btn-secondary" onclick="changePage(-1)">&laquo; Sebelumnya</button>
+              <span id="pageIndicator">Halaman 1 / 1</span>
+              <button id="btnNextPage" class="btn-secondary" onclick="changePage(1)">Selanjutnya &raquo;</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB MASTER DATA -->
+      <div id="masterBarangView" class="tab-page hidden superadmin-only-page">
+        <!-- USER MANAGEMENT -->
+        <div class="card">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:15px;">
+            <h2>Master Akun</h2>
+            <button class="btn-success" onclick="openModalTambahUser()">+ Tambah Akun Pengguna Baru</button>
+          </div>
+
+          <div class="table-wrap" style="margin-top:15px;">
+            <table>
+              <thead>
+                <tr>
+                  <th>No</th>
+                  <th>Nama</th>
+                  <th>Username</th>
+                  <th>Role</th>
+                  <th>Hak Akses (CRUD)</th>
+                  <th>Akses Menu & Gudang</th>
+                  <th class="text-center">Aksi</th>
+                </tr>
+              </thead>
+              <tbody id="tabelUsers"></tbody>
+            </table>
+          </div>
+          <div class="pagination-bar">
+            <div class="pagination-info-group">
+              <label style="font-size:13px; margin:0;">Per halaman:</label>
+              <select id="pageSizeUsers" style="width: auto; padding: 4px;" onchange="renderUsersTabel(1)">
+                <option value="5" selected>5</option>
+                <option value="10">10</option>
+              </select>
+              <span id="infoUsersPage">Menampilkan 0 - 0 dari 0 data</span>
+            </div>
+            <div class="pagination-controls">
+              <button id="btnPrevUsers" class="btn-secondary" onclick="changeUsersPage(-1)">&laquo; Sebelumnya</button>
+              <span id="indicatorUsersPage">Halaman 1 / 1</span>
+              <button id="btnNextUsers" class="btn-secondary" onclick="changeUsersPage(1)">Selanjutnya &raquo;</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- MASTER GUDANG -->
+        <div class="card">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:15px;">
+            <h2>Master Lokasi</h2>
+            <button class="btn-success" onclick="openModalTambahGudang()">+ Tambah Lokasi Gudang Baru</button>
+          </div>
+
+          <!-- FITUR PERMANEN: STATUS BOLEH MINUS PADA SELURUH TRANSAKSI -->
+          <div style="background: #f8fafc; padding: 12px 15px; border-radius: 6px; border: 1px solid #cbd5e1; margin-bottom: 15px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+            <div>
+              <b style="font-size:14px; color:#1e293b;">Fitur Stok Minus (Boleh Minus Seluruh Transaksi):</b>
+              <div style="font-size:12px; color:#64748b;">Pengaturan sistem untuk mengizinkan atau menolak transaksi jika stok tidak mencukupi (stok minus).</div>
+            </div>
+            <div>
+              <button id="btnToggleAllowMinus" class="btn-primary system-toggle-button" onclick="toggleAllowNegativeStock()">
+                Status Stok Minus: NON-AKTIF (Di-Blok)
+              </button>
+            </div>
+          </div>
+
+          <!-- FITUR PERMANEN: STATUS CUSTOM BACKDATE SELURUH TRANSAKSI -->
+          <div style="background: #f8fafc; padding: 12px 15px; border-radius: 6px; border: 1px solid #cbd5e1; margin-bottom: 15px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+            <div>
+              <b style="font-size:14px; color:#1e293b;">Fitur Custom Backdate (Seluruh Transaksi):</b>
+              <div style="font-size:12px; color:#64748b;">Pengaturan sistem untuk mengizinkan atau menolak pengisian tanggal mundur (backdate) pada semua transaksi (Manufaktur, Transfer, Penerimaan, Pengeluaran).</div>
+            </div>
+            <div>
+              <button id="btnToggleAllowBackdate" class="btn-primary system-toggle-button" onclick="toggleAllowBackdate()">
+                Status Custom Backdate: NON-AKTIF (Di-Blok)
+              </button>
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width:5%;">No</th>
+                  <th style="width:30%;">Nama Lokasi Gudang</th>
+                  <th style="width:20%;">Barcode Gudang (EAN-13)</th>
+                  <th class="text-center" style="width:20%;">Aksi</th>
+                </tr>
+              </thead>
+              <tbody id="tabelMasterGudang"></tbody>
+            </table>
+          </div>
+          <div class="master-location-actions">
+            <button type="button" class="btn-secondary" onclick="openModalPDADefaults()">Pengaturan Default PDA</button>
+            <button type="button" class="btn-secondary" onclick="openModalPindahMasterProduk()">Pindahkan Master Produk</button>
+            <button type="button" class="btn-secondary" onclick="openModalCekKategoriGudang()">Cek Kategori / Produk Gudang</button>
+            <button type="button" class="btn-secondary" onclick="openModalMasterTujuanKeluar()">Master Tujuan Keluar</button>
+            <button type="button" class="btn-secondary" onclick="openModalMasterTujuanMasuk()">Master Tujuan Masuk</button>
+          </div>
+          <div class="pagination-bar">
+            <div class="pagination-info-group">
+              <label style="font-size:13px; margin:0;">Per halaman:</label>
+              <select id="pageSizeGudang" style="width: auto; padding: 4px;" onchange="renderMasterGudangTabel(1)">
+                <option value="5" selected>5</option>
+                <option value="10">10</option>
+              </select>
+              <span id="infoGudangPage">Menampilkan 0 - 0 dari 0 data</span>
+            </div>
+            <div class="pagination-controls">
+              <button id="btnPrevGudang" class="btn-secondary" onclick="changeMasterGudangPage(-1)">&laquo; Sebelumnya</button>
+              <span id="indicatorGudangPage">Halaman 1 / 1</span>
+              <button id="btnNextGudang" class="btn-secondary" onclick="changeMasterGudangPage(1)">Selanjutnya &raquo;</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- MASTER TUJUAN KELUAR -->
+        <div id="modalMasterTujuanKeluar" class="modal-overlay">
+          <div class="modal-card master-data-modal">
+            <div class="master-data-modal-head">
+              <h2>Master Tujuan Keluar</h2>
+              <button type="button" class="btn-danger" onclick="closeModalMasterTujuanKeluar()">Tutup</button>
+            </div>
+            <button class="btn-success" onclick="openModalTambahTujuanKeluar()">+ Tambah Tujuan Keluar Baru</button>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width:5%;">No</th>
+                  <th style="width:45%;">Nama Tujuan Keluar</th>
+                  <th class="text-center" style="width:20%;">Aksi</th>
+                </tr>
+              </thead>
+              <tbody id="tabelMasterTujuanKeluar"></tbody>
+            </table>
+          </div>
+          <div class="pagination-bar">
+            <div class="pagination-info-group">
+              <label style="font-size:13px; margin:0;">Per halaman:</label>
+              <select id="pageSizeTujuanKeluar" style="width: auto; padding: 4px;" onchange="renderMasterTujuanKeluarTabel(1)">
+                <option value="5" selected>5</option>
+                <option value="10">10</option>
+              </select>
+              <span id="infoTujuanKeluarPage">Menampilkan 0 - 0 dari 0 data</span>
+            </div>
+            <div class="pagination-controls">
+              <button id="btnPrevTujuanKeluar" class="btn-secondary" onclick="changeMasterTujuanKeluarPage(-1)">&laquo; Sebelumnya</button>
+              <span id="indicatorTujuanKeluarPage">Halaman 1 / 1</span>
+              <button id="btnNextTujuanKeluar" class="btn-secondary" onclick="changeMasterTujuanKeluarPage(1)">Selanjutnya &raquo;</button>
+            </div>
+          </div>
+          </div>
+        </div>
+
+        <!-- MASTER TUJUAN MASUK -->
+        <div id="modalMasterTujuanMasuk" class="modal-overlay">
+          <div class="modal-card master-data-modal">
+            <div class="master-data-modal-head">
+              <h2>Master Tujuan Masuk</h2>
+              <button type="button" class="btn-danger" onclick="closeModalMasterTujuanMasuk()">Tutup</button>
+            </div>
+            <button type="button" class="btn-success" onclick="openModalTambahTujuanMasuk()">+ Tambah Tujuan Masuk Baru</button>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th style="width:10%;">No</th><th>Nama Tujuan Masuk</th><th class="text-center" style="width:25%;">Aksi</th></tr></thead>
+                <tbody id="tabelMasterTujuanMasuk"></tbody>
+              </table>
+            </div>
+            <div class="pagination-bar">
+              <div class="pagination-info-group">
+                <label style="font-size:13px; margin:0;">Per halaman:</label>
+                <select id="pageSizeTujuanMasuk" style="width:auto; padding:4px;" onchange="renderMasterTujuanMasukTabel(1)">
+                  <option value="5" selected>5</option>
+                  <option value="10">10</option>
+                </select>
+                <span id="infoTujuanMasukPage">Menampilkan 0 - 0 dari 0 data</span>
+              </div>
+              <div class="pagination-controls">
+                <button id="btnPrevTujuanMasuk" class="btn-secondary" onclick="changeMasterTujuanMasukPage(-1)">&laquo; Sebelumnya</button>
+                <span id="indicatorTujuanMasukPage">Halaman 1 / 1</span>
+                <button id="btnNextTujuanMasuk" class="btn-secondary" onclick="changeMasterTujuanMasukPage(1)">Selanjutnya &raquo;</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- MASTER KATEGORI -->
+        <div id="modalMasterKategori" class="modal-overlay">
+          <div class="modal-card master-data-modal">
+            <div class="master-data-modal-head">
+            <h2>Master Kategori Produk</h2>
+              <button type="button" class="btn-danger" onclick="closeModalMasterKategori()">Tutup</button>
+            </div>
+            <button class="btn-success" onclick="openModalTambahKategori()">+ Tambah Kategori Produk Baru</button>
+
+          <div class="master-data-filter-bar">
+            <input id="searchMasterKategori" type="search" placeholder="Cari nama kategori..." oninput="renderMasterKategoriTabel(1)">
+            <select id="filterMasterKategoriUsage" onchange="renderMasterKategoriTabel(1)">
+              <option value="">Semua Kategori</option>
+              <option value="used">Dipakai Produk</option>
+              <option value="unused">Belum Dipakai</option>
+            </select>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th style="width:10%;">No</th><th style="width:65%;">Nama Kategori Produk</th><th class="text-center" style="width:25%;">Aksi</th></tr></thead>
+              <tbody id="tabelMasterKategori"></tbody>
+            </table>
+          </div>
+          <div class="pagination-bar">
+            <div class="pagination-info-group">
+              <label style="font-size:13px; margin:0;">Per halaman:</label>
+              <select id="pageSizeKategori" style="width: auto; padding: 4px;" onchange="renderMasterKategoriTabel(1)">
+                <option value="5" selected>5</option>
+                <option value="10">10</option>
+              </select>
+              <span id="infoKategoriPage">Menampilkan 0 - 0 dari 0 data</span>
+            </div>
+            <div class="pagination-controls">
+              <button id="btnPrevKategori" class="btn-secondary" onclick="changeMasterKategoriPage(-1)">&laquo; Sebelumnya</button>
+              <span id="indicatorKategoriPage">Halaman 1 / 1</span>
+              <button id="btnNextKategori" class="btn-secondary" onclick="changeMasterKategoriPage(1)">Selanjutnya &raquo;</button>
+            </div>
+          </div>
+          </div>
+        </div>
+
+        <!-- MASTER UNIT OF MATERIAL (UoM) -->
+        <div id="modalMasterUom" class="modal-overlay">
+          <div class="modal-card master-data-modal">
+            <div class="master-data-modal-head">
+            <h2>Master Unit of Material (UoM)</h2>
+              <button type="button" class="btn-danger" onclick="closeModalMasterUom()">Tutup</button>
+            </div>
+            <button class="btn-success" onclick="openModalTambahUom()">+ Tambah UoM Baru</button>
+
+          <div class="master-data-filter-bar">
+            <input id="searchMasterUom" type="search" placeholder="Cari kode atau nama UoM..." oninput="renderMasterUomTabel(1)">
+            <select id="filterMasterUomUsage" onchange="renderMasterUomTabel(1)">
+              <option value="">Semua UoM</option>
+              <option value="used">Dipakai Produk</option>
+              <option value="unused">Belum Dipakai</option>
+            </select>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th style="width:8%;">No</th><th style="width:18%;">Kode UoM</th><th>Nama Unit</th><th class="text-center" style="width:16%;">Dipakai Produk</th><th class="text-center" style="width:22%;">Aksi</th></tr></thead>
+              <tbody id="tabelMasterUom"></tbody>
+            </table>
+          </div>
+          <div class="pagination-bar">
+            <div class="pagination-info-group">
+              <label style="font-size:13px; margin:0;">Per halaman:</label>
+              <select id="pageSizeUom" style="width: auto; padding: 4px;" onchange="renderMasterUomTabel(1)">
+                <option value="5" selected>5</option>
+                <option value="10">10</option>
+              </select>
+              <span id="infoUomPage">Menampilkan 0 - 0 dari 0 data</span>
+            </div>
+            <div class="pagination-controls">
+              <button id="btnPrevUom" class="btn-secondary" onclick="changeMasterUomPage(-1)">&laquo; Sebelumnya</button>
+              <span id="indicatorUomPage">Halaman 1 / 1</span>
+              <button id="btnNextUom" class="btn-secondary" onclick="changeMasterUomPage(1)">Selanjutnya &raquo;</button>
+            </div>
+          </div>
+          </div>
+        </div>
+
+        <!-- MASTER BARANG -->
+        <div class="card">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:10px;">
+            <h2>Master Produk</h2>
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+              <button class="btn-success" onclick="openModalTambahMasterBarang()">+ Tambah Master Barang Baru</button>
+              <button data-feature="export" class="btn-info" onclick="downloadTemplateMasterBarang()">Download Template Excel</button>
+              <button data-feature="export" class="btn-success" onclick="exportMasterBarangExcel()">Export Master Barang Excel</button>
+            </div>
+          </div>
+          <div class="excel-upload-box" data-feature="import" style="margin-bottom:15px; padding:12px; background:#f8fafc; border:1px solid #cbd5e1; border-radius:6px;">
+            <b>Upload Initial Stock / Tambah Stok Barang via Excel</b>
+            <div class="excel-upload-row" style="display:flex; gap:10px; margin-top:8px;">
+              <input data-feature="import" type="file" id="importStokExcelFile" accept=".xlsx, .xls">
+              <button data-feature="import" class="btn-primary" onclick="uploadStokExcelBatch()">Upload & Proses Stok Excel</button>
+            </div>
+          </div>
+
+          <div class="master-data-filter-bar">
+            <input id="searchMasterBarang" type="search" placeholder="Cari SKU, nama, atau barcode..." oninput="renderMasterBarangTabel(1)">
+            <select id="filterMasterBarangKategori" onchange="renderMasterBarangTabel(1)">
+              <option value="">Semua Kategori</option>
+            </select>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>No</th><th>Kode SKU</th><th>Nama Barang</th><th>Barcode (EAN-13)</th><th>Kategori Produk</th><th>UoM</th><th class="text-center">Aksi</th></tr>
+              </thead>
+              <tbody id="tabelMasterBarang"></tbody>
+            </table>
+          </div>
+          <div class="master-product-actions">
+            <button type="button" class="btn-secondary" onclick="openModalMasterBOM()">Master BOM</button>
+            <button type="button" class="btn-secondary" onclick="openModalMasterBundle()">Master SKU Bundle</button>
+            <button type="button" class="btn-secondary" onclick="openModalMasterUom()">Master UoM</button>
+            <button type="button" class="btn-secondary" onclick="openModalMasterKategori()">Master Kategori</button>
+          </div>
+          <div class="pagination-bar">
+            <div class="pagination-info-group">
+              <label style="font-size:13px; margin:0;">Per halaman:</label>
+              <select id="pageSizeBarang" style="width: auto; padding: 4px;" onchange="renderMasterBarangTabel(1)">
+                <option value="5">5</option>
+                <option value="10" selected>10</option>
+                <option value="25">25</option>
+              </select>
+              <span id="infoBarangPage">Menampilkan 0 - 0 dari 0 data</span>
+            </div>
+            <div class="pagination-controls">
+              <button id="btnPrevBarang" class="btn-secondary" onclick="changeMasterBarangPage(-1)">&laquo; Sebelumnya</button>
+              <span id="indicatorBarangPage">Halaman 1 / 1</span>
+              <button id="btnNextBarang" class="btn-secondary" onclick="changeMasterBarangPage(1)">Selanjutnya &raquo;</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- MASTER BOM (BILL OF MATERIALS) -->
+        <div id="modalMasterBOM" class="modal-overlay">
+          <div class="modal-card master-bom-modal">
+            <div class="master-bom-head">
+              <h2>Master BOM (Bill of Materials)</h2>
+              <button type="button" class="btn-danger" onclick="closeModalMasterBOM()">Tutup</button>
+            </div>
+            <p style="font-size:13px; color:#64748b; margin-bottom:15px;">Pilih SKU hasil, tentukan nama BOM, lalu masukkan komponen bahan.</p>
+            <div class="master-bom-actions">
+              <button class="btn-success" onclick="openModalTambahBOM()">+ Tambah Master BOM Baru</button>
+              <button data-feature="export" class="btn-info" onclick="downloadTemplateBOMExcel()">Download Template BOM</button>
+              <button data-feature="export" class="btn-success" onclick="exportBOMExcel()">Export BOM Excel</button>
+              <input data-feature="import" type="file" id="importBOMExcelFile" accept=".xlsx, .xls">
+              <button data-feature="import" class="btn-primary" onclick="uploadBOMExcelBatch()">Upload BOM Excel</button>
+            </div>
+
+            <div class="master-data-filter-bar">
+              <input id="searchMasterBOM" type="search" placeholder="Cari nama, SKU hasil, atau komponen..." oninput="renderMasterBOMTabel(1)">
+              <select id="filterMasterBOMCategory" onchange="renderMasterBOMTabel(1)">
+                <option value="">Semua Kategori Hasil</option>
+              </select>
+            </div>
+            <div class="table-wrap" style="margin-top:10px;">
+              <table>
+                <thead>
+                  <tr><th>No</th><th>Nama BOM</th><th>SKU Hasil</th><th>Komponen Bahan Baku</th><th class="text-center">Aksi</th></tr>
+                </thead>
+                <tbody id="tabelMasterBOM"></tbody>
+              </table>
+            </div>
+
+            <div class="pagination-bar">
+              <div class="pagination-info-group">
+                <label style="font-size:13px; margin:0;">Per halaman:</label>
+                <select id="pageSizeBOM" style="width:auto; padding:4px;" onchange="renderMasterBOMTabel(1)">
+                  <option value="5" selected>5</option>
+                  <option value="10">10</option>
+                </select>
+                <span id="infoBOMPage">Menampilkan 0 - 0 dari 0 data</span>
+              </div>
+              <div class="pagination-controls">
+                <button id="btnPrevBOM" class="btn-secondary" onclick="changeMasterBOMPage(-1)">&laquo; Sebelumnya</button>
+                <span id="indicatorBOMPage">Halaman 1 / 1</span>
+                <button id="btnNextBOM" class="btn-secondary" onclick="changeMasterBOMPage(1)">Selanjutnya &raquo;</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- MASTER BUNDLE -->
+        <div id="modalMasterBundle" class="modal-overlay">
+          <div class="modal-card master-data-modal">
+            <div class="master-data-modal-head">
+            <h2>Master SKU Bundle / Combo</h2>
+              <button type="button" class="btn-danger" onclick="closeModalMasterBundle()">Tutup</button>
+            </div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
+              <button class="btn-success" onclick="openModalTambahBundle()">+ Tambah Bundle Baru</button>
+              <button data-feature="export" class="btn-info" onclick="downloadTemplateBundleExcel()">Download Template Bundle Excel</button>
+              <button data-feature="export" class="btn-success" onclick="exportBundleExcel()">Export Bundle Excel</button>
+            </div>
+          
+          <div class="excel-upload-box" data-feature="import" style="margin-bottom:15px; padding:12px; background:#f8fafc; border:1px solid #cbd5e1; border-radius:6px;">
+            <b>Upload Mapping SKU Bundle / Combo via Excel</b>
+            <div class="excel-upload-row" style="display:flex; gap:10px; margin-top:8px;">
+              <input data-feature="import" type="file" id="importBundleExcelFileInput" accept=".xlsx, .xls">
+              <button data-feature="import" class="btn-primary" onclick="uploadBundleExcelBatch()">Upload & Proses Bundle Excel</button>
+            </div>
+          </div>
+
+          <div class="master-data-filter-bar">
+            <input id="searchMasterBundle" type="search" placeholder="Cari SKU bundle atau komponen..." oninput="renderBundleMappingTabel(1)">
+            <select id="filterMasterBundleComponent" onchange="renderBundleMappingTabel(1)">
+              <option value="">Semua Komponen</option>
+            </select>
+          </div>
+          <div class="table-wrap" style="margin-top: 10px;">
+            <table>
+              <thead>
+                <tr><th>No</th><th>SKU Combo Manifest</th><th>Rincian SKU Komponen</th><th>Total Item per Bundle</th><th class="text-center">Aksi</th></tr>
+              </thead>
+              <tbody id="tabelBundleMapping"></tbody>
+            </table>
+          </div>
+          <div class="pagination-bar">
+            <div class="pagination-info-group">
+              <label style="font-size:13px; margin:0;">Per halaman:</label>
+              <select id="pageSizeBundle" style="width: auto; padding: 4px;" onchange="renderBundleMappingTabel(1)">
+                <option value="5" selected>5</option>
+                <option value="10">10</option>
+              </select>
+              <span id="infoBundlePage">Menampilkan 0 - 0 dari 0 data</span>
+            </div>
+            <div class="pagination-controls">
+              <button id="btnPrevBundle" class="btn-secondary" onclick="changeMasterBundlePage(-1)">&laquo; Sebelumnya</button>
+              <span id="indicatorBundlePage">Halaman 1 / 1</span>
+              <button id="btnNextBundle" class="btn-secondary" onclick="changeMasterBundlePage(1)">Selanjutnya &raquo;</button>
+            </div>
+          </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 2: INPUT TRANSAKSI -->
+      <div id="inputView" class="tab-page hidden">
+        <div class="card">
+          <h2>Input Transaksi Barang (Multi-Gudang & Multi-Item)</h2>
+          <div class="batch-header">
+            <div>
+              <label>Tipe Transaksi</label>
+              <select id="tipeTrans" onchange="toggleTipeForm()">
+                <option value="MASUK">Barang Masuk (Penerimaan)</option>
+                <option value="KELUAR">Barang Keluar (Pengeluaran)</option>
+                <option value="TRANSFER">Transfer Antar Gudang</option>
+              </select>
+            </div>
+            <div id="wrapperGudangMain">
+              <label id="lblGudangMain">Pilih Gudang</label>
+              <select id="selectGudangMain" onchange="updateAllRowStockAlerts()"></select>
+            </div>
+            <div id="wrapperGudangTujuan" style="display:none;">
+              <label>Gudang Tujuan Penerima</label>
+              <select id="selectGudangTujuan"></select>
+            </div>
+            <div><label>Tanggal Transaksi</label><input id="tanggalTrans" type="date"></div>
+            <div><label>No. Surat Jalan / Referensi</label><input id="noSuratJalan" type="text" placeholder="Otomatis / Manual"></div>
+          </div>
+
+          <div style="background:#f8fafc; padding:15px; border-radius:6px; margin-bottom:15px; border:1px solid #e2e8f0;">
+            <div class="form-row" style="margin-bottom:0;">
+              <div>
+                <label id="lblUploadFoto">Upload Foto/Gambar Bukti Transaksi:</label>
+                <input type="file" id="uploadFotoInput" accept="image/*" onchange="previewBatchImage(this)">
+                <div id="imagePreviewContainer" style="margin-top:8px; display:none;">
+                  <img id="imgPreview" src="" alt="Preview" style="max-height: 100px; border-radius: 6px; border: 1px solid #cbd5e1;">
+                </div>
+              </div>
+              <div>
+                <label>Ekspedisi / Kurir / Pengirim / Penerima:</label>
+                <input type="text" id="pengirimKurir" placeholder="JNE / Sopir Internal">
+              </div>
+            </div>
+          </div>
+
+          <div id="itemsContainer"></div>
+
+          <div style="margin-top: 15px; display:flex; gap:10px; flex-wrap:wrap;">
+            <button class="btn-success" type="button" onclick="tambahBarisInput()">+ Tambah Baris Barang</button>
+            <button class="btn-primary" onclick="simpanBatchTransaksi(false)">Simpan Transaksi</button>
+            <button class="btn-info" type="button" onclick="simpanBatchTransaksi(true)">Simpan & Cetak Surat Jalan</button>
+          </div>
+        </div>
+        <div id="approvalHostInput" class="approval-host"></div>
+      </div>
+
+      <!-- TAB 3: MANUFAKTUR -->
+      <div id="manufakturView" class="tab-page hidden superadmin-only-page">
+        <div class="card">
+          <h2>Modul Manufaktur</h2>
+          <p style="font-size:13px; color:#64748b; margin-bottom:15px;">Pilih resep BOM yang telah didaftarkan di Master Data, tentukan lokasi gudang, tanggal, dan qty yang diinginkan.</p>
+          <form onsubmit="prosesManufaktur(event)">
+            <div class="form-row">
+              <div>
+                <label>Tahap Transformasi</label>
+                <select id="mfgTahap" onchange="updateMfgKodeProduksiAuto()">
+                  <option value="WIP">1. Bahan Baku &#10140; WIP</option>
+                  <option value="Semi Finished Good">2. WIP &#10140; Semi Finished Good (SFG)</option>
+                  <option value="Finish Good">3. SFG &#10140; Finish Good (FG)</option>
+                </select>
+              </div>
+              <div><label>Lokasi Gudang</label><select id="mfgGudang" onchange="renderMfgSummary()"></select></div>
+              <div><label style="color:#2563eb;">Tanggal Manufaktur</label><input type="date" id="mfgTanggal" onchange="updateMfgKodeProduksiAuto()"></div>
+            </div>
+
+            <div id="mfgItemsContainer"></div>
+            <div class="mfg-multi-toolbar">
+              <button type="button" class="btn-secondary" onclick="tambahBarisMfg()">+ Tambah 1 Baris</button>
+              <input type="number" id="mfgJumlahBaris" min="1" max="50" value="3" title="Jumlah baris yang ditambahkan sekaligus">
+              <button type="button" class="btn-secondary" onclick="tambahBanyakBarisMfg()">+ Tambah Banyak Baris</button>
+              <button type="button" class="btn-danger" onclick="hapusSemuaBarisMfg()">Kosongkan Semua</button>
+            </div>
+            <div id="mfgSummaryBox" class="mfg-summary-box"></div>
+
+            <button type="submit" class="btn-primary" style="margin-top: 10px;">Eksekusi Proses Manufaktur</button>
+          </form>
+        </div>
+      </div>
+
+      <!-- TAB 4: HARDWARE SCAN PDA -->
+      <div id="pdaView" class="tab-page hidden">
+        <div class="pda-card">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+            <h2 style="margin:0; font-size:18px;">PDA Outbound & Retur Scanner</h2>
+            <button data-feature="export" class="btn-success" style="font-size:11px; padding:4px 8px;" onclick="exportPDAScanData()">Export Scan PDA (.xlsx)</button>
+          </div>
+          
+          <label>Mode Outbound & Input Scanner:</label>
+          <div class="pda-btn-group" style="margin-top: 5px;">
+            <button id="btnEcom" data-feature="pda_ecommerce" class="btn-mode active" onclick="setPDAMode('Ecommerce')">E-COMMERCE</button>
+            <button id="btnPdaRetur" data-feature="pda_retur" class="btn-mode" onclick="setPDAMode('Retur')">REKONSILIASI RETUR</button>
+          </div>
+
+          <!-- MODE 1: E-COMMERCE -->
+          <div id="pdaEcomContainer">
+            <div style="margin-bottom: 12px; background: #0f172a; padding: 8px 12px; border-radius: 6px; border: 1px solid #334155; font-size:12px; color:#cbd5e1;">
+              Default tersimpan: Gudang <b id="lblPdaEcomWh" style="color:#60a5fa;">-</b> | Tujuan <b id="lblPdaEcomTujuan" style="color:#38bdf8;">-</b>
+            </div>
+            <div class="form-row pda-location-fields">
+              <div><label for="pdaEcomGudangPilih">Gudang Pemotong Stok</label><select id="pdaEcomGudangPilih" required></select></div>
+              <div><label for="pdaEcomTujuanPilih">Tujuan Keluar</label><select id="pdaEcomTujuanPilih" required></select></div>
+            </div>
+
+            <div style="margin-bottom: 15px; background: #1e293b; padding: 12px; border-radius: 6px; border: 1px solid #3b82f6;">
+              <label style="color:#60a5fa;">1. Scan Air Way Bill (AWB Resi Manifest):</label>
+              <div style="display:flex; gap:8px;">
+                <input type="text" id="pdaAWBMulti" placeholder="Scan Barcode Resi & Enter..." autocomplete="off" onkeydown="handleAWBScanEnter(event)">
+                <button type="button" id="btnResetAWB" class="btn-danger" style="display:none;" onclick="resetPDAScanState()">Reset</button>
+              </div>
+              <small id="awbStatusText" style="color:#94a3b8; display:block; margin-top:5px;">Status: Scan resi AWB untuk mulai</small>
+            </div>
+
+            <div style="margin-bottom: 15px;">
+              <label>2. Scan Barcode / SKU Barang:</label>
+              <input type="text" id="pdaKodeMulti" placeholder="Scan Barcode / SKU..." autocomplete="off" disabled onkeydown="handleItemScanEnter(event)">
+            </div>
+
+            <div style="margin-bottom: 15px; background: #1e293b; padding: 10px; border-radius: 6px; max-height: 200px; overflow-y: auto;">
+              <label style="font-size:12px; color:#94a3b8;">Item Ter-Scan pada AWB Ini:</label>
+              <ul id="pdaScanList" style="margin-top:5px; padding-left:20px; font-size:13px; color:#e2e8f0;"></ul>
+            </div>
+
+            <button type="button" id="btnSubmitManual" class="btn-success" style="width:100%; padding: 12px; font-size:15px;" onclick="submitMultiScanEcom()">Manual Simpan Paket AWB</button>
+          </div>
+
+          <!-- MODE 2: REKONSILIASI RETUR -->
+          <div id="pdaReturContainer" style="display:none;">
+            <div style="margin-bottom: 15px; background: #1e293b; padding: 12px; border-radius: 6px; border: 1px solid #10b981;">
+              <label style="color:#34d399;">1. Scan Resi AWB Barang Retur:</label>
+              <div style="display:flex; gap:8px;">
+                <input type="text" id="pdaReturAWB" placeholder="Scan AWB Retur & Enter..." autocomplete="off" onkeydown="handleReturAWBScanEnter(event)">
+                <button type="button" id="btnResetReturAWB" class="btn-danger" style="display:none;" onclick="resetPDAReturState()">Reset</button>
+              </div>
+              <small id="pdaReturStatusText" style="color:#94a3b8; display:block; margin-top:5px;">Status: Scan resi retur untuk auto-detect 3PL & status resi</small>
+            </div>
+
+            <div style="margin-bottom: 12px;">
+              <label>Pilih Lokasi Gudang Masuk Retur:</label>
+              <select id="pdaReturGudang" required></select>
+            </div>
+
+            <div style="margin-bottom: 15px;">
+              <label>2. Scan Barcode 13-Digit / SKU Barang Retur:</label>
+              <input type="text" id="pdaReturKodeItem" placeholder="Scan Barcode / SKU Barang Retur..." autocomplete="off" disabled onkeydown="handleReturItemScanEnter(event)">
+            </div>
+
+            <div style="margin-bottom: 15px; background: #1e293b; padding: 10px; border-radius: 6px; max-height: 200px; overflow-y: auto;">
+              <label style="font-size:12px; color:#94a3b8;">Item Ter-Scan pada Resi Retur Ini:</label>
+              <ul id="pdaReturScanList" style="margin-top:5px; padding-left:20px; font-size:13px; color:#e2e8f0;"></ul>
+            </div>
+
+            <button type="button" id="btnSubmitReturPDA" class="btn-success" style="width:100%; padding: 12px; font-size:15px;" onclick="submitPDAScanRetur()">Simpan & Masukkan Barang Retur Ke Gudang</button>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- TAB 5: REKONSILIASI E-COMMERCE -->
+      <div id="rekonView" class="tab-page hidden">
+        <div class="card">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:15px;">
+            <h2>Rekonsiliasi Scan PDA vs Manifest Excel (E-Commerce)</h2>
+            <div style="display:flex; gap:8px;">
+              <button class="btn-danger" style="font-size:12px;" onclick="clearRekonData()">Reset Data Manifest</button>
+              <button data-feature="export" class="btn-info" onclick="downloadTemplateManifestExcel()">Download Template Manifest Excel</button>
+            </div>
+          </div>
+
+          <div style="display:flex; gap:10px; margin-bottom: 20px; align-items: flex-end;">
+            <div style="flex:1;">
+              <label>Upload File Excel Manifest (.xlsx):</label>
+              <input data-feature="import" type="file" id="excelFile" accept=".xlsx, .xls">
+            </div>
+            <button data-feature="import" class="btn-success" onclick="uploadManifestExcel()">Upload & Import Manifest</button>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Tanggal Manifest</th><th>Air Way Bill (AWB)</th><th>SKU Finish Good</th><th>Qty Manifest</th><th>Qty Scan PDA</th><th class="text-center">Status Matching</th>
+                </tr>
+              </thead>
+              <tbody id="tabelRekon"></tbody>
+            </table>
+          </div>
+
+          <div class="pagination-bar">
+            <div class="pagination-info-group">
+              <label style="font-size:13px; margin:0;">Per halaman:</label>
+              <select id="pageSizeRekon" style="width: auto; padding: 4px;" onchange="renderRekonsiliasi(1)">
+                <option value="50" selected>50</option>
+                <option value="100">100</option>
+                <option value="200">200</option>
+              </select>
+              <span id="infoRekonPage">Menampilkan 0 - 0 dari 0 data</span>
+            </div>
+            <div class="pagination-controls">
+              <button id="btnPrevRekon" class="btn-secondary" onclick="changeRekonPage(-1)">&laquo; Sebelumnya</button>
+              <span id="indicatorRekonPage">Halaman 1 / 1</span>
+              <button id="btnNextRekon" class="btn-secondary" onclick="changeRekonPage(1)">Selanjutnya &raquo;</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 5.2: REKONSILIASI RETUR -->
+      <div id="rekonReturView" class="tab-page hidden">
+        <div class="card">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:10px;">
+            <h2>Rekonsiliasi Retur E-Commerce & Pengaturan Prefix AWB</h2>
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+              <button class="btn-success" onclick="openModalTambahAWB()">+ Tambah Aturan AWB</button>
+              <button data-feature="export" class="btn-success" onclick="exportRekonReturExcel()">Export Data Rekon Retur (.xlsx)</button>
+            </div>
+          </div>
+          <p style="font-size:13px; color:#64748b; margin-bottom:15px;">Catat barang retur berdasarkan resi (AWB) via Scan PDA atau Input Transaksi. Status retur otomatis membandingkan kesesuaian SKU dan Qty retur fisik dengan transaksi asal.</p>
+
+          <div style="background:#f8fafc; padding:15px; border-radius:6px; margin-bottom:20px; border:1px solid #cbd5e1;">
+            <h3 style="font-size:14px; margin-bottom:10px;">Daftar Aturan Prefix & Kode 3PL AWB</h3>
+            <div class="table-wrap" style="max-height:220px; overflow-y:auto;">
+              <table>
+                <thead><tr><th>Prefix / Kode</th><th>Nama 3PL</th><th class="text-center">Aksi</th></tr></thead>
+                <tbody id="tabelPrefixAWB"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="table-wrap" style="margin-top:20px;">
+            <table>
+              <thead>
+                <tr><th>No</th><th>Tanggal Retur</th><th>No. Resi (AWB)</th><th>Status Resi</th><th>3PL</th><th>Kode SKU</th><th>Nama Barang</th><th>Qty Retur</th><th>Gudang Masuk</th><th class="text-center">Status Kelengkapan</th><th class="text-center">Aksi</th></tr>
+              </thead>
+              <tbody id="tabelReturList"></tbody>
+            </table>
+          </div>
+
+          <div class="pagination-bar">
+            <div class="pagination-info-group">
+              <label style="font-size:13px; margin:0;">Per halaman:</label>
+              <select id="pageSizeRetur" style="width: auto; padding: 4px;" onchange="renderTabelRetur(1)">
+                <option value="10" selected>10</option>
+                <option value="25">25</option>
+              </select>
+              <span id="infoReturPage">Menampilkan 0 - 0 dari 0 data</span>
+            </div>
+            <div class="pagination-controls">
+              <button id="btnPrevRetur" class="btn-secondary" onclick="changeReturPage(-1)">&laquo; Sebelumnya</button>
+              <span id="indicatorReturPage">Halaman 1 / 1</span>
+              <button id="btnNextRetur" class="btn-secondary" onclick="changeReturPage(1)">Selanjutnya &raquo;</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- MODAL TAMBAH ATURAN AWB -->
+    <div id="modalTambahAWB" class="modal-overlay">
+      <div class="modal-card" style="max-width: 500px;">
+        <h2>Tambah Aturan Prefix & Kode 3PL AWB</h2>
+        <form onsubmit="tambahPrefixAWB(event)">
+          <div style="margin-bottom: 12px;">
+            <label>Prefix AWB / Kode (Regex/Text)</label>
+            <input type="text" id="prefixCodeInput" placeholder="Contoh: SPX atau ^(LXA|JZ)" required>
+          </div>
+          <div style="margin-bottom: 15px;">
+            <label>Nama 3PL / Kurir</label>
+            <input type="text" id="prefixNameInput" placeholder="Contoh: SHOPEE" required>
+          </div>
+          <div style="display:flex; justify-content:flex-end; gap:10px;">
+            <button type="button" class="btn-danger" onclick="closeModalTambahAWB()">Batal</button>
+            <button type="submit" class="btn-success">Simpan Aturan AWB</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- MODAL EDIT ATURAN AWB -->
+    <div id="modalEditAWB" class="modal-overlay">
+      <div class="modal-card" style="max-width: 500px;">
+        <h2>Edit Aturan Prefix & Kode 3PL AWB</h2>
+        <form onsubmit="simpanEditPrefixAWB(event)">
+          <input type="hidden" id="editPrefixIndex">
+          <div style="margin-bottom: 12px;">
+            <label>Prefix AWB / Kode (Regex/Text)</label>
+            <input type="text" id="editPrefixCodeInput" placeholder="Contoh: SPX atau ^(LXA|JZ)" required>
+          </div>
+          <div style="margin-bottom: 15px;">
+            <label>Nama 3PL / Kurir</label>
+            <input type="text" id="editPrefixNameInput" placeholder="Contoh: SHOPEE" required>
+          </div>
+          <div style="display:flex; justify-content:flex-end; gap:10px;">
+            <button type="button" class="btn-danger" onclick="closeModalEditAWB()">Batal</button>
+            <button type="submit" class="btn-primary">Simpan Perubahan</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+      <!-- TAB 5.5: CEK STOK -->
+      <div id="cekStokView" class="tab-page hidden">
+        <div class="card cek-card">
+          <div class="cek-head">
+            <h2>Cek Stok &amp; Lokasi</h2>
+            <p>Scan EAN-13 / SKU barang untuk melihat sebaran stok per gudang, atau scan barcode / nama lokasi gudang untuk melihat isi lokasi tersebut.</p>
+          </div>
+          <div id="cekPendingBanner" class="cek-pending-banner" style="display:none;"></div>
+          <div class="cek-scan-bar">
+            <div class="cek-scan-field">
+              <label for="inputCekEan">Scan EAN-13 / SKU / Lokasi Gudang</label>
+              <input type="text" id="inputCekEan" placeholder="Scan barcode barang atau lokasi gudang..." onkeydown="handleCekEanEnter(event)" autocomplete="off">
+            </div>
+            <button class="btn-primary cek-scan-btn" onclick="prosesCekEan()">Cek Stok &amp; Lokasi</button>
+          </div>
+          <div id="hasilCekEanContainer" class="cek-result" style="display:none;">
+            <div class="cek-result-head">
+              <h3 id="cekEanJudul">Hasil Pencarian</h3>
+              <div class="cek-result-actions">
+                <button id="btnExportCekPdf" data-feature="pdf" class="btn-info" onclick="exportCekStokPdf()">Export PDF</button>
+                <button id="btnCekTransferMain" data-feature="transfer_send,transfer_receive" class="btn-success" style="display:none;" onclick="bukaModalCekTransfer(cekState.sku, '')">Transfer / Keluar / Terima</button>
+              </div>
+            </div>
+            <div id="cekEanDetailContent"></div>
+          </div>
+        </div>
+        <div id="approvalHostCek" class="approval-host"></div>
+      </div>
+
+      <!-- PANEL APPROVAL TRANSFER (bukan menu; dipasang otomatis di bawah Input Transaksi & Cek Stok bila ada transfer antar lokasi) -->
+      <div id="approvalPanelStore" style="display:none;">
+      <div id="transferApprovalPanel" class="transfer-approval-panel">
+        <div class="card">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:15px;">
+            <h2 style="margin:0;">Approval Transfer Antar Gudang (Good Delivery &rarr; Good Receipt) <span id="approvalPendingBadge" class="badge badge-warning" style="display:none; margin-left:6px;"></span></h2>
+            <button data-feature="export" class="btn-success" onclick="exportTransferApprovalExcel()">Export Approval Transfer Excel (.xlsx)</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>No SJ / Transfer ID</th>
+                  <th>Gudang Pengirim</th>
+                  <th>Gudang Penerima</th>
+                  <th>SKU & Nama Barang</th>
+                  <th>Qty Kirim (GD)</th>
+                  <th>Qty Terima (GR)</th>
+                  <th class="text-center">Aksi Penerimaan</th>
+                  <th class="text-center">Status Approval</th>
+                </tr>
+              </thead>
+              <tbody id="tabelTransferApproval"></tbody>
+            </table>
+          </div>
+          <div class="pagination-bar">
+            <div class="pagination-info-group">
+              <label style="font-size:13px; margin:0;">Per halaman:</label>
+              <select id="pageSizeTransfer" style="width: auto; padding: 4px;" onchange="renderTransferApproval(1)">
+                <option value="10" selected>10</option>
+                <option value="25">25</option>
+              </select>
+              <span id="infoTransferPage">Menampilkan 0 - 0 dari 0 data</span>
+            </div>
+            <div class="pagination-controls">
+              <button id="btnPrevTransfer" class="btn-secondary" onclick="changeTransferPage(-1)">&laquo; Sebelumnya</button>
+              <span id="indicatorTransferPage">Halaman 1 / 1</span>
+              <button id="btnNextTransfer" class="btn-secondary" onclick="changeTransferPage(1)">Selanjutnya &raquo;</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      </div>
+
+      <!-- TAB 6: LAPORAN STOK & STOCK OPNAME -->
+      <div id="laporanStokView" class="tab-page hidden">
+        <div class="card">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:15px;">
+            <h2>Laporan Pergerakan Stok & Stock Opname</h2>
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+              <button data-feature="export" class="btn-info" onclick="downloadTemplateOpnameExcel()">Download Template Opname</button>
+              <button data-feature="export" class="btn-success" onclick="exportLaporanStokExcel()">Export Report Stok Excel</button>
+            </div>
+          </div>
+          <div class="excel-upload-box" data-feature="import" style="margin-bottom:15px; padding:12px; background:#f8fafc; border:1px solid #cbd5e1; border-radius:6px;">
+            <b>Upload Stock Opname (Fisik) via Excel</b>
+            <div class="excel-upload-row" style="display:flex; gap:10px; margin-top:8px;">
+              <input type="file" id="importOpnameExcelFile" accept=".xlsx, .xls">
+              <button class="btn-primary" onclick="importOpnameExcel(document.getElementById('importOpnameExcelFile'))">Upload & Proses Stock Opname Excel</button>
+            </div>
+            <small style="display:block; margin-top:6px; color:#64748b;">Pilih gudang pada Filter Gudang (atau isi kolom "Gudang" di Excel). Baris dengan kolom Stock Opname kosong tidak mengubah stok.</small>
+          </div>
+
+          <div class="export-bar" style="margin-bottom:15px;">
+            <div class="filter-controls">
+              <label style="margin:0;">Filter Gudang:</label><select id="filterGudangStok" onchange="renderLaporanStok(1)" style="width:auto;"></select>
+              <label style="margin:0; margin-left:10px;">Periode Dari:</label><input type="date" id="tglStokAwal" onchange="renderLaporanStok(1)" style="width:auto;">
+              <label style="margin:0;">Sampai:</label><input type="date" id="tglStokAkhir" onchange="renderLaporanStok(1)" style="width:auto;">
+              <input id="searchStok" placeholder="Cari SKU / Nama Barang..." oninput="renderLaporanStok(1)" style="margin-left:10px; min-width:200px;">
+            </div>
+          </div>
+
+          <div class="opname-add-bar">
+            <div class="opname-add-field">
+              <label for="opnameTambahSku">Tambah Item ke Stock Opname (Gudang Terpilih)</label>
+              <select id="opnameTambahSku"></select>
+            </div>
+            <div class="opname-add-qty">
+              <label for="opnameTambahQty">Stok Fisik</label>
+              <input type="number" id="opnameTambahQty" step="any" min="0" placeholder="Qty fisik">
+            </div>
+            <button type="button" class="btn-primary" onclick="tambahItemOpnameManual()">+ Tambah ke Opname</button>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>No</th><th>Kode SKU</th><th>Nama Barang</th><th>Kategori Produk</th><th>UoM</th><th>Masuk</th><th>Keluar</th><th>Tanggal</th><th>Stok Sistem</th><th style="background:#e0f2fe; color:#0369a1;">Stock Opname (Fisik)</th><th>Selisih / Variance</th><th class="text-center">Status Matching</th></tr>
+              </thead>
+              <tbody id="tabelLaporanStok"></tbody>
+            </table>
+          </div>
+
+          <div class="pagination-bar">
+            <div class="pagination-info-group">
+              <label style="font-size:13px; margin:0;">Per halaman:</label>
+              <select id="pageSizeLaporanStok" style="width: auto; padding: 4px;" onchange="renderLaporanStok(1)">
+                <option value="10" selected>10</option>
+                <option value="25">25</option>
+                <option value="50">50</option>
+              </select>
+              <span id="infoLaporanStokPage">Menampilkan 0 - 0 dari 0 data</span>
+            </div>
+            <div class="pagination-controls">
+              <button id="btnPrevLaporanStok" class="btn-secondary" onclick="changeLaporanStokPage(-1)">&laquo; Sebelumnya</button>
+              <span id="indicatorLaporanStokPage">Halaman 1 / 1</span>
+              <button id="btnNextLaporanStok" class="btn-secondary" onclick="changeLaporanStokPage(1)">Selanjutnya &raquo;</button>
+            </div>
+          </div>
+
+          <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:15px; flex-wrap:wrap;">
+            <button class="btn-secondary" style="padding:10px 18px; font-weight:bold; font-size:13px;" onclick="simpanDraftOpname()">💾 Simpan Sebagai Draft</button>
+            <button class="btn-warning" style="padding:10px 18px; font-weight:bold; font-size:13px;" onclick="bukaModalKonfirmasiOpname()">⚡ Eksekusi Penyesuaian Stok (Adjustment)</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- MODAL TAMBAH USER -->
+    <div id="modalTambahUser" class="modal-overlay">
+      <div class="modal-card" style="max-width: 600px; max-height:90vh; overflow-y:auto;">
+        <h2>Tambah Akun Pengguna Baru</h2>
+        <form onsubmit="tambahUserBaru(event)">
+          <div class="form-row">
+            <div><label>Nama Pengguna</label><input type="text" id="usrNama" placeholder="Nama" required></div>
+            <div><label>Username Login</label><input type="text" id="usrUsername" placeholder="Username" required></div>
+            <div><label>Password</label><input type="password" id="usrPassword" placeholder="Password" required></div>
+            <div>
+              <label>Role / Peran</label>
+              <select id="usrRole">
+                <option value="user">User Staff</option>
+                <option value="admin">Admin Staf</option>
+                <option value="superadmin">Superadmin</option>
+              </select>
+            </div>
+          </div>
+
+          <div style="background:#f8fafc; padding:12px; border-radius:6px; border:1px solid #cbd5e1; margin-bottom:15px;">
+            <label style="margin-bottom:8px; display:block; font-weight:bold;">1. Izin Hak Akses Transaksi (CRUD):</label>
+            <div style="display:flex; gap:20px; flex-wrap:wrap; margin-bottom:12px;">
+              <label><input type="checkbox" id="chkCreate" checked> Create</label>
+              <label><input type="checkbox" id="chkRead" checked> Read</label>
+              <label><input type="checkbox" id="chkUpdate"> Update</label>
+              <label><input type="checkbox" id="chkDelete"> Delete</label>
+            </div>
+
+            <label style="margin-bottom:8px; display:block; font-weight:bold;">Akses Fitur:</label>
+            <div class="user-feature-access-box" id="userFeatureAccessBox">
+              <label><input type="checkbox" class="user-feature-access" value="export" checked> Export</label>
+              <label><input type="checkbox" class="user-feature-access" value="import" checked> Import</label>
+              <label><input type="checkbox" class="user-feature-access" value="pdf" checked> PDF</label>
+              <label><input type="checkbox" class="user-feature-access" value="pda_ecommerce" checked> PDA E-Commerce</label>
+              <label><input type="checkbox" class="user-feature-access" value="pda_retur" checked> PDA Retur</label>
+              <label><input type="checkbox" class="user-feature-access" value="transfer_send" checked> Kirim Transfer</label>
+              <label><input type="checkbox" class="user-feature-access" value="transfer_receive" checked> Terima Transfer</label>
+            </div>
+
+            <label style="margin-bottom:8px; display:block; font-weight:bold;">2. Akses Menu Utama System:</label>
+            <div style="display:flex; gap:15px; flex-wrap:wrap; margin-bottom:12px;" id="userMenuAccessBox">
+              <label><input type="checkbox" class="chk-menu-access" value="dashboardView" checked> Dashboard</label>
+              <label><input type="checkbox" class="chk-menu-access" value="masterBarangView"> Master Data</label>
+              <label><input type="checkbox" class="chk-menu-access" value="inputView" checked> Input Transaksi</label>
+              <label><input type="checkbox" class="chk-menu-access" value="manufakturView"> Modul Manufaktur</label>
+              <label><input type="checkbox" class="chk-menu-access" value="pdaView" checked> Scan PDA</label>
+              <label><input type="checkbox" class="chk-menu-access" value="rekonView" checked> Rekon E-Com</label>
+              <label><input type="checkbox" class="chk-menu-access" value="rekonReturView" checked> Rekon Retur</label>
+              <label><input type="checkbox" class="chk-menu-access" value="cekStokView" checked> Cek Stok & EAN</label>
+              <label><input type="checkbox" class="chk-menu-access" value="laporanStokView" checked> Laporan Stok</label>
+            </div>
+
+            <label style="margin-bottom:8px; display:block; font-weight:bold;">3. Akses Lokasi Gudang:</label>
+            <div style="display:flex; gap:15px; flex-wrap:wrap;" id="userGudangAccessBox"></div>
+          </div>
+
+          <div style="display:flex; justify-content:flex-end; gap:10px;">
+            <button type="button" class="btn-danger" onclick="closeModalTambahUser()">Batal</button>
+            <button type="submit" class="btn-success">+ Tambah Akun Pengguna</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- MODAL TAMBAH GUDANG -->
+    <div id="modalTambahGudang" class="modal-overlay">
+      <div class="modal-card">
+        <h2>Tambah Lokasi Gudang Baru</h2>
+        <form onsubmit="tambahGudangViaMaster(event)">
+          <div style="margin-bottom:12px;">
+            <label>Nama Lokasi / Gudang</label>
+            <input type="text" id="mgNamaGudang" placeholder="Gudang Utama / Gudang B" required>
+          </div>
+          <div style="margin-bottom:15px;">
+            <label>Barcode Gudang (EAN-13 Code)</label>
+            <input type="text" id="mgEanGudang" placeholder="8993883600001">
+          </div>
+          <div style="display:flex; justify-content:flex-end; gap:10px;">
+            <button type="button" class="btn-danger" onclick="closeModalTambahGudang()">Batal</button>
+            <button type="submit" class="btn-success">Simpan Gudang</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- MODAL TAMBAH TUJUAN KELUAR -->
+    <div id="modalTambahTujuanKeluar" class="modal-overlay">
+      <div class="modal-card">
+        <h2>Tambah Tujuan Keluar Baru</h2>
+        <form onsubmit="tambahTujuanKeluarMaster(event)">
+          <div style="margin-bottom:15px;">
+            <label>Nama Tujuan Keluar</label>
+            <input type="text" id="mtNamaTujuan" placeholder="Penjualan E-Commerce..." required>
+          </div>
+          <div style="display:flex; justify-content:flex-end; gap:10px;">
+            <button type="button" class="btn-danger" onclick="closeModalTambahTujuanKeluar()">Batal</button>
+            <button type="submit" class="btn-success">Simpan Tujuan</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="modalTambahTujuanMasuk" class="modal-overlay">
+      <div class="modal-card">
+        <h2>Tambah Tujuan Masuk</h2>
+        <form onsubmit="tambahTujuanMasuk(event)">
+          <div style="margin-bottom:15px;"><label for="tujuanMasukNama">Nama Tujuan Masuk</label><input id="tujuanMasukNama" type="text" required></div>
+          <div style="display:flex; justify-content:flex-end; gap:10px;">
+            <button type="button" class="btn-danger" onclick="closeModalTambahTujuanMasuk()">Batal</button>
+            <button type="submit" class="btn-primary">Simpan</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="modalEditTujuanMasuk" class="modal-overlay">
+      <div class="modal-card">
+        <h2>Edit Tujuan Masuk</h2>
+        <form onsubmit="simpanEditTujuanMasuk(event)">
+          <input type="hidden" id="editTujuanMasukIndex">
+          <div style="margin-bottom:15px;"><label for="editTujuanMasukNama">Nama Tujuan Masuk</label><input id="editTujuanMasukNama" type="text" required></div>
+          <div style="display:flex; justify-content:flex-end; gap:10px;">
+            <button type="button" class="btn-danger" onclick="closeModalEditTujuanMasuk()">Batal</button>
+            <button type="submit" class="btn-primary">Simpan Perubahan</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- MODAL TAMBAH KATEGORI -->
+    <div id="modalTambahKategori" class="modal-overlay">
+      <div class="modal-card">
+        <h2>Tambah Kategori Produk Baru</h2>
+        <form onsubmit="tambahKategoriViaMaster(event)">
+          <div style="margin-bottom:15px;">
+            <label>Nama Kategori Produk</label>
+            <input type="text" id="mkNamaKategori" placeholder="Kemasan / Finish Good" required>
+          </div>
+          <div style="display:flex; justify-content:flex-end; gap:10px;">
+            <button type="button" class="btn-danger" onclick="closeModalTambahKategori()">Batal</button>
+            <button type="submit" class="btn-success">Simpan Kategori</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- MODAL TAMBAH UOM -->
+    <div id="modalTambahUom" class="modal-overlay">
+      <div class="modal-card">
+        <h2>Tambah Unit of Material (UoM)</h2>
+        <form onsubmit="tambahUomViaMaster(event)">
+          <div style="margin-bottom:12px;"><label>Kode UoM</label><input type="text" id="muKode" placeholder="PCS / KG / BOX" maxlength="10" required></div>
+          <div style="margin-bottom:15px;"><label>Nama Unit</label><input type="text" id="muNama" placeholder="Pieces / Kilogram / Box" required></div>
+          <div style="display:flex; justify-content:flex-end; gap:10px;">
+            <button type="button" class="btn-danger" onclick="closeModalTambahUom()">Batal</button>
+            <button type="submit" class="btn-success">Simpan UoM</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- MODAL EDIT UOM -->
+    <div id="modalEditUom" class="modal-overlay">
+      <div class="modal-card">
+        <h2>Edit Unit of Material (UoM)</h2>
+        <form onsubmit="simpanEditMasterUom(event)">
+          <input type="hidden" id="editUomIndex">
+          <div style="margin-bottom:12px;"><label>Kode UoM</label><input type="text" id="editUomKode" maxlength="10" required></div>
+          <div style="margin-bottom:15px;"><label>Nama Unit</label><input type="text" id="editUomNama" required></div>
+          <div style="display:flex; justify-content:flex-end; gap:10px;">
+            <button type="button" class="btn-danger" onclick="closeModalEditUom()">Batal</button>
+            <button type="submit" class="btn-primary">Simpan Perubahan</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- MODAL TAMBAH MASTER BARANG -->
+    <div id="modalTambahMasterBarang" class="modal-overlay">
+      <div class="modal-card" style="max-width: 500px;">
+        <h2>Tambah Master Barang Baru</h2>
+        <form onsubmit="tambahMasterBarang(event)">
+          <div style="margin-bottom: 12px;"><label>Kode Barang / SKU</label><input type="text" id="mbSKU" placeholder="FG-OMD-LV1" required></div>
+          <div style="margin-bottom: 12px;"><label>Nama Barang</label><input type="text" id="mbNama" placeholder="FG OMD LV1" required></div>
+          <div style="margin-bottom: 12px;"><label>Barcode / EAN-13 Code</label><input type="text" id="mbBarcode" placeholder="8993883610003"></div>
+          <div style="margin-bottom: 15px;"><label>Kategori Produk</label><select id="mbKategoriProduk" style="width:100%; padding:8px;"></select></div>
+          <div style="margin-bottom: 15px;"><label>Unit of Material (UoM)</label><select id="mbUom" style="width:100%; padding:8px;"></select></div>
+          <div style="display:flex; justify-content:flex-end; gap:10px;">
+            <button type="button" class="btn-danger" onclick="closeModalTambahMasterBarang()">Batal</button>
+            <button type="submit" class="btn-success">Simpan Barang</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- MODAL PENGATURAN DEFAULT PDA -->
+    <div id="modalPDADefaults" class="modal-overlay">
+      <div class="modal-card pda-defaults-modal">
+        <div class="modal-section-head">
+          <h2>Pengaturan Default PDA</h2>
+          <button type="button" class="btn-danger" onclick="closeModalPDADefaults()">Tutup</button>
+        </div>
+        <div class="form-row">
+          <div>
+            <label for="pdaEcomWarehouseDefault">Gudang Default PDA E-Commerce</label>
+            <select id="pdaEcomWarehouseDefault"></select>
+          </div>
+          <div>
+            <label for="pdaEcomTujuanDefault">Tujuan Default PDA E-Commerce</label>
+            <select id="pdaEcomTujuanDefault"></select>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn-danger" onclick="closeModalPDADefaults()">Batal</button>
+          <button type="button" class="btn-primary" onclick="simpanPDADefaults()">Terapkan</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL PINDAH MASTER PRODUK ANTAR LOKASI -->
+    <div id="modalPindahMasterProduk" class="modal-overlay">
+      <div class="modal-card move-products-modal">
+        <div class="modal-section-head">
+          <div>
+            <h2>Pindahkan Master Produk Antar Lokasi</h2>
+            <p id="pindahLokasiAsalInfo"></p>
+          </div>
+          <button type="button" class="btn-danger" onclick="closeModalPindahMasterProduk()">Tutup</button>
+        </div>
+        <p class="modal-hint">Pilih kategori dan produk yang tersedia, lalu tentukan lokasi tujuan.</p>
+        <div class="form-row move-filter-row">
+          <div>
+            <label for="pindahLokasiAsal">Lokasi Asal</label>
+            <select id="pindahLokasiAsal" onchange="changePindahLokasiAsal()"></select>
+          </div>
+          <div>
+            <label for="pindahKategoriProduk">Filter Kategori Produk</label>
+            <select id="pindahKategoriProduk" onchange="renderPindahProdukList()"></select>
+          </div>
+          <div>
+            <label for="pindahLokasiTujuan">Lokasi Gudang Tujuan</label>
+            <select id="pindahLokasiTujuan"></select>
+          </div>
+        </div>
+        <div class="move-list-head">
+          <b>Pilih Produk (Multi Item)</b>
+          <label><input id="pindahPilihSemua" type="checkbox" onchange="togglePilihSemuaPindah(this.checked)"> Pilih Semua</label>
+        </div>
+        <div id="pindahProdukList" class="move-product-list"></div>
+        <div class="move-preview">
+          <b>Preview Stok Sesuai Filter Kategori:</b>
+          <div id="pindahPreviewStok">Pilih lokasi asal.</div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn-danger" onclick="closeModalPindahMasterProduk()">Batal</button>
+          <button type="button" class="btn-success" onclick="pindahkanMasterProdukSekarang()">Pindahkan Sekarang</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL CEK KATEGORI / PRODUK DI LOKASI -->
+    <div id="modalCekKategoriGudang" class="modal-overlay">
+      <div class="modal-card check-location-modal">
+        <div class="modal-section-head">
+          <h2>Cek Kategori / Produk di Gudang</h2>
+          <button type="button" class="btn-danger" onclick="closeModalCekKategoriGudang()">Tutup</button>
+        </div>
+        <div class="form-row">
+          <div>
+            <label for="cekKategoriLokasi">Lokasi Gudang</label>
+            <select id="cekKategoriLokasi" onchange="renderCekKategoriGudang(1)"></select>
+          </div>
+          <div>
+            <label for="cekKategoriFilter">Kategori Produk</label>
+            <select id="cekKategoriFilter" onchange="renderCekKategoriGudang(1)"></select>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>No</th><th>Kode SKU</th><th>Nama Produk</th><th>Kategori</th><th class="text-center">Stok</th></tr></thead>
+            <tbody id="cekKategoriProdukList"></tbody>
+          </table>
+        </div>
+        <div class="pagination-bar">
+          <div class="pagination-info-group">
+            <label style="font-size:13px; margin:0;">Per halaman:</label>
+            <select id="pageSizeCekKategori" style="width:auto; padding:4px;" onchange="renderCekKategoriGudang(1)">
+              <option value="10" selected>10</option>
+              <option value="25">25</option>
+              <option value="50">50</option>
+            </select>
+            <span id="infoCekKategoriPage">Menampilkan 0 - 0 dari 0 data</span>
+          </div>
+          <div class="pagination-controls">
+            <button id="btnPrevCekKategori" class="btn-secondary" onclick="changeCekKategoriPage(-1)">&laquo; Sebelumnya</button>
+            <span id="indicatorCekKategoriPage">Halaman 1 / 1</span>
+            <button id="btnNextCekKategori" class="btn-secondary" onclick="changeCekKategoriPage(1)">Selanjutnya &raquo;</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL TAMBAH MASTER BOM -->
+    <div id="modalTambahBOM" class="modal-overlay">
+      <div class="modal-card" style="max-width: 600px; max-height:90vh; overflow-y:auto;">
+        <h2>Tambah Master BOM (Resep Manufaktur)</h2>
+        <form onsubmit="tambahMasterBOM(event)">
+          <div style="margin-bottom: 12px;">
+            <label>SKU Hasil yang Ingin Dibuat</label>
+            <select id="bomSkuHasil" onchange="autoFillNamaBOM(this)" required></select>
+          </div>
+          <div style="margin-bottom: 12px;">
+            <label>Nama BOM / Resep</label>
+            <input type="text" id="bomNama" placeholder="Otomatis terisi awalan BOM..." required>
+          </div>
+
+          <div style="font-weight:bold; margin-bottom:8px;">Komponen Bahan Asal / Komponen Penyusun:</div>
+          <div id="bomItemsContainer" style="max-height: 200px; overflow-y: auto; margin-bottom: 10px;"></div>
+          <button type="button" class="btn-success" style="margin-bottom: 15px; padding: 6px 12px; font-size:13px;" onclick="tambahBarisBOMItem()">+ Tambah Komponen Bahan</button>
+
+          <div style="display:flex; justify-content:flex-end; gap:10px;">
+            <button type="button" class="btn-danger" onclick="closeModalTambahBOM()">Batal</button>
+            <button type="submit" class="btn-primary">Simpan Master BOM</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- MODAL TAMBAH BUNDLE -->
+    <div id="modalTambahBundle" class="modal-overlay">
+      <div class="modal-card" style="max-width: 600px; max-height:90vh; overflow-y:auto;">
+        <h2>Pemetaan SKU Bundle / Combo Baru</h2>
+        <form onsubmit="tambahBundleMapping(event)">
+          <input type="hidden" id="bundleEditOldSKU" value="">
+          <div style="margin-bottom: 12px;">
+            <label>Kode SKU Combo / Bundle Manifest</label>
+            <input type="text" id="bundleSKU" placeholder="TrioMercon-OMD2" required>
+          </div>
+
+          <div class="mfg-section-title" style="font-weight:bold; margin-bottom:8px;">Isi Barang dalam Bundle Ini:</div>
+          <div id="bundleItemsContainer" style="max-height: 200px; overflow-y: auto; margin-bottom: 10px;"></div>
+          <button type="button" class="btn-success" style="margin-bottom: 15px; padding: 6px 12px; font-size:13px;" onclick="tambahBarisItemBundle()">+ Tambah Item Komponen</button>
+
+          <div style="display:flex; justify-content:flex-end; gap:10px;">
+            <button type="button" class="btn-danger" onclick="closeModalTambahBundle()">Batal</button>
+            <button type="submit" class="btn-primary" id="btnSimpanBundle">Simpan Konfigurasi Bundle</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- MODAL KONFIRMASI HAPUS -->
+    <div id="modalGeneralDelete" class="modal-overlay">
+      <div class="modal-card" style="max-width:420px; text-align:center;">
+        <h3 style="margin-bottom:12px; color:#dc2626;">Konfirmasi Penghapusan</h3>
+        <p id="txtDeleteConfirmMessage" style="font-size:14px; color:#334155; margin-bottom:20px;">Apakah Anda yakin?</p>
+        <div style="display:flex; justify-content:center; gap:15px;">
+          <button class="btn-danger" style="padding:8px 24px; font-weight:bold;" id="btnConfirmDeleteYes">Ya</button>
+          <button class="btn-secondary" style="padding:8px 24px; font-weight:bold;" onclick="tutupModalGeneralDelete()">Tidak</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL EDIT TRANSAKSI -->
+    <div id="modalEdit" class="modal-overlay">
+      <div class="modal-card">
+        <h2>Edit Transaksi Barang</h2>
+        <form onsubmit="simpanEditTransaksi(event)">
+          <input type="hidden" id="editTransId">
+          <div style="margin-bottom: 12px;"><label>Tipe Transaksi</label><select id="editTipe" onchange="toggleEditTipeFields()"><option value="MASUK">MASUK</option><option value="KELUAR">KELUAR</option></select></div>
+          <div style="margin-bottom: 12px;"><label>SKU / Nama Barang</label><input type="text" id="editKode" readonly style="background:#f1f5f9;"></div>
+          <div style="margin-bottom: 12px;" id="groupEditKodeProd"><label>Kode Produksi</label><input type="text" id="editKodeProduksi"></div>
+          <div style="margin-bottom: 12px;"><label>Kategori Produk</label><select id="editKategoriProduk" onchange="toggleEditTipeFields()"></select></div>
+          <div style="margin-bottom: 12px;" id="groupEditKatMasuk"><label>Kategori Masuk</label><input type="text" id="editKategoriMasuk"></div>
+          <div style="margin-bottom: 12px;" id="groupEditTujKeluar"><label>Tujuan Keluar</label><input type="text" id="editTujuanKeluar"></div>
+          <div style="margin-bottom: 12px;"><label>Jumlah Qty</label><input type="number" step="any" id="editQty" required></div>
+          <div style="margin-bottom: 15px;"><label>Tanggal Transaksi</label><input type="date" id="editTanggal" required></div>
+          <div style="display:flex; justify-content:flex-end; gap:10px;">
+            <button type="button" class="btn-danger" onclick="closeModalEdit()">Batal</button>
+            <button type="submit" class="btn-primary">Simpan Perubahan</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- MODAL OPNAME -->
+    <div id="modalConfirmOpname" class="modal-overlay">
+      <div class="modal-card" style="max-width:440px; text-align:center;">
+        <h3 style="margin-bottom:12px; color:#d97706;">Konfirmasi Penyesuaian Stok</h3>
+        <p style="font-size:14px; color:#334155; margin-bottom:20px;">Apakah Anda yakin ingin mengonversi selisih persediaan fisik menjadi penyesuaian stok?</p>
+        <div style="display:flex; justify-content:center; gap:15px;">
+          <button class="btn-success" style="padding:8px 24px; font-weight:bold;" onclick="eksekusiOpnameYa()">Ya, Lanjutkan</button>
+          <button class="btn-danger" style="padding:8px 24px; font-weight:bold;" onclick="tutupModalKonfirmasiOpname()">Batal</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL PREVIEW FOTO -->
+    <div id="modalPhotoPreview" class="modal-overlay">
+      <div class="modal-card" style="text-align:center;">
+        <h3 style="margin-bottom: 10px;">Preview Dokumen / Foto</h3>
+        <img id="modalPreviewImg" src="" style="max-width: 100%; max-height: 400px; border-radius:8px; margin-bottom:15px; border:1px solid #cbd5e1;">
+        <div><button class="btn-danger" onclick="document.getElementById('modalPhotoPreview').style.display='none'">Tutup</button></div>
+      </div>
+    </div>
+
+    <!-- MODAL PREVIEW AKSI TRANSAKSI -->
+    <div id="modalTransactionActions" class="modal-overlay">
+      <div class="modal-card transaction-preview-modal">
+        <div class="modal-section-head">
+          <div>
+            <h2>Preview Transaksi</h2>
+            <p id="transactionPreviewSummary"></p>
+          </div>
+          <button type="button" class="btn-danger" onclick="closeModalTransactionActions()">Tutup</button>
+        </div>
+        <div class="transaction-preview-actions">
+          <button id="btnPreviewTransactionEdit" type="button" class="btn-warning" onclick="jalankanAksiPreviewTransaksi('edit')">Edit</button>
+          <button id="btnPreviewTransactionDelete" type="button" class="btn-danger" onclick="jalankanAksiPreviewTransaksi('delete')">Hapus</button>
+          <button id="btnPreviewTransactionPhoto" type="button" class="btn-info" onclick="jalankanAksiPreviewTransaksi('photo')">Foto</button>
+          <button id="btnPreviewTransactionSJ" type="button" class="btn-primary" onclick="jalankanAksiPreviewTransaksi('sj')">Surat Jalan</button>
+        </div>
+        <p id="transactionPreviewReadOnly" class="transaction-preview-readonly" style="display:none;">Akun ini hanya memiliki akses baca.</p>
+      </div>
+    </div>
+
+    <!-- MODAL CEK STOK: TRANSFER / KELUAR / TERIMA -->
+    <div id="modalCekTransfer" class="modal-overlay">
+      <div class="modal-card cek-modal-card">
+        <form onsubmit="simpanCekTransfer(event)">
+          <div class="cek-modal-head">
+            <h3>Transfer / Keluar / Terima Barang</h3>
+            <p id="cekTrfBarangInfo"></p>
+          </div>
+          <div class="cek-form-grid">
+            <div>
+              <label for="cekTrfTipe">Tipe Transaksi</label>
+              <select id="cekTrfTipe" onchange="toggleCekTipe()">
+                <option value="TRANSFER">Transfer Antar Lokasi (Keluarkan &rarr; Terima)</option>
+                <option value="KELUAR">Barang Keluar (Pengeluaran)</option>
+                <option value="MASUK">Barang Masuk (Penerimaan)</option>
+              </select>
+            </div>
+            <div>
+              <label id="cekTrfLblGudang" for="cekTrfGudang">Lokasi Asal</label>
+              <select id="cekTrfGudang" onchange="toggleCekTipe()"></select>
+            </div>
+            <div id="cekTrfWrapTujuan">
+              <label for="cekTrfTujuan">Lokasi Tujuan Penerima</label>
+              <select id="cekTrfTujuan" onchange="updateCekStokInfo()"></select>
+            </div>
+            <div id="cekTrfWrapKatMasuk" style="display:none;">
+              <label for="cekTrfKatMasuk">Kategori Masuk</label>
+              <select id="cekTrfKatMasuk"></select>
+            </div>
+            <div id="cekTrfWrapTujKeluar" style="display:none;">
+              <label for="cekTrfTujKeluar">Tujuan Keluar</label>
+              <select id="cekTrfTujKeluar"></select>
+            </div>
+            <div>
+              <label for="cekTrfQty">Qty (<span id="cekTrfUomLbl">UoM</span>)</label>
+              <input type="number" id="cekTrfQty" step="any" min="0.0001" value="1">
+            </div>
+            <div id="cekTrfWrapKodeProd" style="display:none;">
+              <label for="cekTrfKodeProd">Kode Produksi (Finish Good)</label>
+              <input type="text" id="cekTrfKodeProd" placeholder="Opsional">
+            </div>
+            <div>
+              <label for="cekTrfTanggal">Tanggal Transaksi</label>
+              <input type="date" id="cekTrfTanggal">
+            </div>
+            <div>
+              <label for="cekTrfNoSJ">No. Surat Jalan / Referensi</label>
+              <input type="text" id="cekTrfNoSJ" placeholder="Otomatis / Manual">
+            </div>
+            <div>
+              <label for="cekTrfKurir">Ekspedisi / Kurir / Pengirim / Penerima</label>
+              <input type="text" id="cekTrfKurir" placeholder="JNE / Sopir Internal">
+            </div>
+            <div class="cek-span-2">
+              <label for="cekTrfFoto">Upload Foto/Gambar Bukti Transaksi</label>
+              <input type="file" id="cekTrfFoto" accept="image/*" onchange="previewCekFoto(this)">
+              <div id="cekTrfFotoWrap" class="cek-foto-wrap" style="display:none;"><img id="cekTrfFotoImg" src="" alt="Preview"></div>
+            </div>
+          </div>
+          <div id="cekTrfStokInfo" class="cek-stock-note"></div>
+          <div class="cek-modal-actions">
+            <button type="button" class="btn-secondary" onclick="tutupModalCekTransfer()">Batal</button>
+            <button type="submit" class="btn-primary">Simpan Transaksi</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- MODAL EDIT MASTER BARANG -->
+    <div id="modalEditMaster" class="modal-overlay">
+      <div class="modal-card">
+        <h2>Edit Master Barang & Barcode</h2>
+        <form onsubmit="simpanEditMasterBarang(event)">
+          <input type="hidden" id="editMasterOldSKU">
+          <div style="margin-bottom: 12px;"><label>Kode Barang / SKU</label><input type="text" id="editMasterSKU" required></div>
+          <div style="margin-bottom: 12px;"><label>Nama Barang</label><input type="text" id="editMasterNama" required></div>
+          <div style="margin-bottom: 12px;"><label>Barcode / EAN-13 Code</label><input type="text" id="editMasterBarcode"></div>
+          <div style="margin-bottom: 15px;"><label>Kategori Produk</label><select id="editMasterKategori"></select></div>
+          <div style="margin-bottom: 15px;"><label>Unit of Material (UoM)</label><select id="editMasterUom"></select></div>
+          <div style="display:flex; justify-content:flex-end; gap:10px;">
+            <button type="button" class="btn-danger" onclick="closeModalEditMaster()">Batal</button>
+            <button type="submit" class="btn-primary">Simpan Perubahan</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- MODAL EDIT GUDANG -->
+    <div id="modalEditGudang" class="modal-overlay">
+      <div class="modal-card">
+        <h2>Edit Lokasi Gudang & Barcode</h2>
+        <form onsubmit="simpanEditMasterGudang(event)">
+          <input type="hidden" id="editGudangIndex">
+          <div style="margin-bottom: 12px;"><label>Nama Lokasi / Gudang</label><input type="text" id="editGudangNama" required></div>
+          <div style="margin-bottom: 15px;"><label>Barcode Gudang (EAN-13 Code)</label><input type="text" id="editGudangEan" placeholder="8993883600001"></div>
+          <div style="display:flex; justify-content:flex-end; gap:10px;">
+            <button type="button" class="btn-danger" onclick="closeModalEditGudang()">Batal</button>
+            <button type="submit" class="btn-primary">Simpan Perubahan</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- MODAL EDIT TUJUAN KELUAR -->
+    <div id="modalEditTujuanKeluar" class="modal-overlay">
+      <div class="modal-card">
+        <h2>Edit Master Tujuan Keluar</h2>
+        <form onsubmit="simpanEditMasterTujuanKeluar(event)">
+          <input type="hidden" id="editTujuanIndex">
+          <div style="margin-bottom: 15px;"><label>Nama Tujuan Keluar</label><input type="text" id="editTujuanNama" required></div>
+          <div style="display:flex; justify-content:flex-end; gap:10px;">
+            <button type="button" class="btn-danger" onclick="closeModalEditTujuanKeluar()">Batal</button>
+            <button type="submit" class="btn-primary">Simpan Perubahan</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- MODAL EDIT KATEGORI -->
+    <div id="modalEditKategori" class="modal-overlay">
+      <div class="modal-card">
+        <h2>Edit Kategori Produk</h2>
+        <form onsubmit="simpanEditMasterKategori(event)">
+          <input type="hidden" id="editKategoriIndex">
+          <div style="margin-bottom: 15px;"><label>Nama Kategori Produk</label><input type="text" id="editKategoriNama" required></div>
+          <div style="display:flex; justify-content:flex-end; gap:10px;">
+            <button type="button" class="btn-danger" onclick="closeModalEditKategori()">Batal</button>
+            <button type="submit" class="btn-primary">Simpan Perubahan</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- MODAL EDIT USER -->
+    <div id="modalEditUser" class="modal-overlay">
+      <div class="modal-card" style="max-width: 600px; max-height:90vh; overflow-y:auto;">
+        <h2>Edit Akun Pengguna & Hak Akses</h2>
+        <form onsubmit="simpanEditUser(event)">
+          <input type="hidden" id="editUserOldUsername">
+          <div style="margin-bottom: 12px;"><label>Nama Pengguna</label><input type="text" id="editUserNama" required></div>
+          <div style="margin-bottom: 12px;"><label>Username</label><input type="text" id="editUserUsername" required></div>
+          <div style="margin-bottom: 12px;"><label>Password Baru</label><input type="password" id="editUserPassword" placeholder="Biarkan kosong jika tidak diubah"></div>
+          <div style="margin-bottom: 12px;"><label>Role</label><select id="editUserRole"><option value="user">User Staff</option><option value="admin">Admin Staf</option><option value="superadmin">Superadmin</option></select></div>
+          <div style="background:#f8fafc; padding:12px; border-radius:6px; border:1px solid #cbd5e1; margin-bottom:15px;">
+            <label style="font-weight:bold; display:block; margin-bottom:6px;">CRUD:</label>
+            <div style="display:flex; gap:10px; margin-bottom:10px;">
+              <label><input type="checkbox" id="editChkCreate"> Create</label>
+              <label><input type="checkbox" id="editChkRead"> Read</label>
+              <label><input type="checkbox" id="editChkUpdate"> Update</label>
+              <label><input type="checkbox" id="editChkDelete"> Delete</label>
+            </div>
+            <label style="font-weight:bold; display:block; margin-bottom:6px;">Akses Fitur:</label>
+            <div class="user-feature-access-box" id="editUserFeatureAccessBox">
+              <label><input type="checkbox" class="edit-user-feature-access" value="export"> Export</label>
+              <label><input type="checkbox" class="edit-user-feature-access" value="import"> Import</label>
+              <label><input type="checkbox" class="edit-user-feature-access" value="pdf"> PDF</label>
+              <label><input type="checkbox" class="edit-user-feature-access" value="pda_ecommerce"> PDA E-Commerce</label>
+              <label><input type="checkbox" class="edit-user-feature-access" value="pda_retur"> PDA Retur</label>
+              <label><input type="checkbox" class="edit-user-feature-access" value="transfer_send"> Kirim Transfer</label>
+              <label><input type="checkbox" class="edit-user-feature-access" value="transfer_receive"> Terima Transfer</label>
+            </div>
+            <label style="font-weight:bold; display:block; margin-bottom:6px;">Menu:</label>
+            <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:10px;" id="editUserMenuAccessBox">
+              <label><input type="checkbox" class="edit-chk-menu-access" value="dashboardView"> Dashboard</label>
+              <label><input type="checkbox" class="edit-chk-menu-access" value="masterBarangView"> Master Data</label>
+              <label><input type="checkbox" class="edit-chk-menu-access" value="inputView"> Input Transaksi</label>
+              <label><input type="checkbox" class="edit-chk-menu-access" value="manufakturView"> Manufaktur</label>
+              <label><input type="checkbox" class="edit-chk-menu-access" value="pdaView"> Scan PDA</label>
+              <label><input type="checkbox" class="edit-chk-menu-access" value="rekonView"> Rekon E-Com</label>
+              <label><input type="checkbox" class="edit-chk-menu-access" value="rekonReturView"> Rekon Retur</label>
+              <label><input type="checkbox" class="edit-chk-menu-access" value="cekStokView"> Cek Stok</label>
+              <label><input type="checkbox" class="edit-chk-menu-access" value="laporanStokView"> Laporan Stok</label>
+            </div>
+            <label style="font-weight:bold; display:block; margin-bottom:6px;">Gudang:</label>
+            <div style="display:flex; gap:10px; flex-wrap:wrap;" id="editUserGudangAccessBox"></div>
+          </div>
+          <div style="display:flex; justify-content:flex-end; gap:10px;">
+            <button type="button" class="btn-danger" onclick="closeModalEditUser()">Batal</button>
+            <button type="submit" class="btn-primary">Simpan Perubahan</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- MODAL EDIT MASTER BOM -->
+    <div id="modalEditBOM" class="modal-overlay">
+      <div class="modal-card" style="max-width: 600px; max-height:90vh; overflow-y:auto;">
+        <h2>Edit Master BOM (Resep Manufaktur)</h2>
+        <form onsubmit="simpanEditMasterBOM(event)">
+          <input type="hidden" id="editBOMId">
+          <div style="margin-bottom: 12px;">
+            <label>SKU Hasil yang Ingin Dibuat</label>
+            <select id="editBOMSkuHasil" onchange="autoFillEditNamaBOM(this)" required></select>
+          </div>
+          <div style="margin-bottom: 12px;">
+            <label>Nama BOM / Resep</label>
+            <input type="text" id="editBOMNama" required>
+          </div>
+          <div style="font-weight:bold; margin-bottom:8px;">Komponen Bahan Asal / Komponen Penyusun:</div>
+          <div id="editBOMItemsContainer" style="max-height: 200px; overflow-y: auto; margin-bottom: 10px;"></div>
+          <button type="button" class="btn-success" style="margin-bottom: 15px; padding: 6px 12px; font-size:13px;" onclick="tambahBarisEditBOMItem()">+ Tambah Komponen Bahan</button>
+          
+          <div style="display:flex; justify-content:flex-end; gap:10px;">
+            <button type="button" class="btn-danger" onclick="closeModalEditBOM()">Batal</button>
+            <button type="submit" class="btn-primary">Simpan Perubahan BOM</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="script.js?v=20261111"></script>
+
+  <footer>
+  <p>Testing Version 1.0</p>
+  <p>© 2026 PT. Anugerah Adiboga Abadi <br>All rights reserved</p>
+  </footer>
+  
+</body>
+</html>
