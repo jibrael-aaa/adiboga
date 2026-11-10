@@ -49,14 +49,14 @@ const API_URL = 'api.php';
 // Daftar key appState yang disinkronkan ke server (users dikelola terpisah via save_users)
 const SYNC_KEYS = [
   'transactions', 'pdaScans', 'manifest', 'stockOpnameData', 'draftOpnameData', 'returRecords',
-  'pendingTransfers', 'awbPrefixRules', 'masterBarang', 'bundleMapping', 'warehouses', 'uomList',
+  'pendingTransfers', 'awbPrefixRules', 'skuBarcodeRules', 'masterBarang', 'bundleMapping', 'warehouses', 'uomList',
   'kategoriProduk', 'kategoriMasukOptions', 'tujuanKeluarOptions', 'masterBOM',
   'allowNegativeStock', 'allowBackdate', 'pdaEcomWarehouse', 'pdaRequestWarehouse',
   'pdaEcomTujuan', 'pdaRequestTujuan'
 ];
 // Key yang hanya boleh ditulis superadmin (harus sama dengan STATE_KEYS di api.php)
 const SYNC_KEYS_SUPER_ONLY = [
-  'masterBarang', 'bundleMapping', 'warehouses', 'uomList', 'kategoriProduk', 'kategoriMasukOptions',
+  'skuBarcodeRules', 'masterBarang', 'bundleMapping', 'warehouses', 'uomList', 'kategoriProduk', 'kategoriMasukOptions',
   'tujuanKeluarOptions', 'masterBOM', 'allowNegativeStock', 'allowBackdate',
   'pdaEcomWarehouse', 'pdaRequestWarehouse', 'pdaEcomTujuan', 'pdaRequestTujuan'
 ];
@@ -245,6 +245,16 @@ function showLogin() {
   document.getElementById('loginPassword').value = '';
 }
 
+function toggleLoginPassword() {
+  const input = document.getElementById('loginPassword');
+  const button = document.querySelector('.password-toggle');
+  if (!input || !button) return;
+  const showing = input.type === 'password';
+  input.type = showing ? 'text' : 'password';
+  button.textContent = showing ? 'Sembunyikan password' : 'Tampilkan password';
+  button.setAttribute('aria-label', showing ? 'Sembunyikan password' : 'Tampilkan password');
+}
+
 function showApp() {
   document.body.classList.toggle('admin-layout', getCurrentLayoutType() === 'admin' && currentUser.role !== 'user');
   const greetEl = document.getElementById('adminGreeting');
@@ -264,6 +274,7 @@ function showApp() {
   renderAllowBackdateUI();
   renderUsersTabel();
   renderMasterDropdowns();
+  renderMasterGudangTabel(pageGudang);
   renderBarangDropdownOptions();
   renderMasterGudangTabel(1);
   renderMasterTujuanKeluarTabel(1);
@@ -441,11 +452,19 @@ function sanitizeWarehouses(rawList) {
   if (!Array.isArray(rawList)) return defaultInitialWarehouses;
   return rawList.map(item => {
     if (typeof item === 'string') {
-      return { nama: item, ean: '-' };
+      return { nama: item, ean: '-', sublokasi: [], subLokasiEan: {} };
     } else if (typeof item === 'object' && item !== null) {
-      return { nama: item.nama || 'Gudang Tanpa Nama', ean: item.ean || '-' };
+      return {
+        nama: item.nama || 'Gudang Tanpa Nama',
+        ean: item.ean || '-',
+        sublokasi: Array.isArray(item.sublokasi) ? item.sublokasi.filter(value => typeof value === 'string' && value.trim()).map(value => value.trim()) : [],
+        subLokasiEan: item.subLokasiEan && typeof item.subLokasiEan === 'object' && !Array.isArray(item.subLokasiEan)
+          ? { ...item.subLokasiEan }
+          : {},
+        subLokasiEanSequence: Number(item.subLokasiEanSequence) || 0
+      };
     }
-    return { nama: 'Gudang Utama', ean: '-' };
+    return { nama: 'Gudang Utama', ean: '-', sublokasi: [], subLokasiEan: {} };
   });
 }
 
@@ -494,6 +513,7 @@ function buildDefaultAppState() {
     stockOpnameData: {},
     draftOpnameData: {},
     awbPrefixRules: cloneDefault(defaultPrefixAWB),
+    skuBarcodeRules: [],
     returRecords: [],
     pendingTransfers: [],
     masterBOM: [],
@@ -511,7 +531,9 @@ let appState = buildDefaultAppState();
 // Normalisasi data setelah dimuat dari server / hasil impor
 function normalizeAppState() {
   appState.warehouses = sanitizeWarehouses(appState.warehouses);
+  ensureSubLocationBarcodes();
   appState.bundleMapping = sanitizeBundleMapping(appState.bundleMapping);
+  appState.skuBarcodeRules = Array.isArray(appState.skuBarcodeRules) ? appState.skuBarcodeRules : [];
   appState.uomList = sanitizeUomList(appState.uomList);
   appState.masterBarang.forEach(b => { if (!b.uom) b.uom = 'PCS'; });
   migrateOpnameKeys();
@@ -722,6 +744,7 @@ function updatePDAScanViewDefaults() {
   if (pdaEcomWhSel) pdaEcomWhSel.value = appState.pdaEcomWarehouse || '';
   const pdaEcomTujuanSel = document.getElementById("pdaEcomTujuanPilih");
   if (pdaEcomTujuanSel) pdaEcomTujuanSel.value = appState.pdaEcomTujuan || '';
+  renderSubLocationPicker('pdaEcomSubLokasi', pdaEcomWhSel?.value || '');
 }
 
 // MODAL POP-UP GENERAL DELETE & CREATE HANDLERS
@@ -1295,7 +1318,7 @@ function tambahGudangViaMaster(e) {
     return alert("Nama lokasi gudang sudah terdaftar!");
   }
 
-  appState.warehouses.push({ nama, ean });
+  appState.warehouses.push({ nama, ean, sublokasi: [], subLokasiEan: {}, subLokasiEanSequence: 0 });
   saveData();
   alert("Lokasi Gudang Berhasil Ditambahkan!");
   document.getElementById("mgNamaGudang").value = "";
@@ -1360,6 +1383,236 @@ function changeMasterGudangPage(delta) {
   renderMasterGudangTabel(pageGudang + delta);
 }
 
+let subLokasiEditWarehouseIndex = -1;
+let pageSubLokasi = 1;
+
+function ean13CheckDigit(firstTwelveDigits) {
+  const digits = String(firstTwelveDigits);
+  if (!/^\d{12}$/.test(digits)) return '';
+  const sum = Array.from(digits).reduce((total, digit, index) =>
+    total + Number(digit) * (index % 2 === 0 ? 1 : 3), 0);
+  return String((10 - (sum % 10)) % 10);
+}
+
+function isValidEan13(value) {
+  const code = String(value || '');
+  return /^\d{13}$/.test(code) && ean13CheckDigit(code.slice(0, 12)) === code[12];
+}
+
+function generateSubLocationEan(warehouse) {
+  if (!warehouse || !/^\d{13}$/.test(String(warehouse.ean || ''))) return '';
+  const prefix = warehouse.ean.slice(0, 9);
+  const used = new Set(appState.warehouses.flatMap(item => [
+    item.ean,
+    ...Object.values(item.subLokasiEan || {})
+  ]).concat(appState.masterBarang.map(product => String(product.barcode || ''))));
+  let sequence = Math.max(0, Number(warehouse.subLokasiEanSequence) || 0);
+  while (sequence < 999) {
+    sequence += 1;
+    const body = `${prefix}${String(sequence).padStart(3, '0')}`;
+    const code = `${body}${ean13CheckDigit(body)}`;
+    if (!used.has(code)) {
+      warehouse.subLokasiEanSequence = sequence;
+      return code;
+    }
+  }
+  return '';
+}
+
+function ensureSubLocationBarcodes() {
+  appState.warehouses.forEach(warehouse => {
+    if (!warehouse.subLokasiEan || typeof warehouse.subLokasiEan !== 'object') warehouse.subLokasiEan = {};
+    (warehouse.sublokasi || []).forEach(name => {
+      if (isValidEan13(warehouse.subLokasiEan[name])) return;
+      const code = generateSubLocationEan(warehouse);
+      if (code) warehouse.subLokasiEan[name] = code;
+    });
+  });
+}
+
+function openModalSubLokasi(index = -1) {
+  const warehouseSelect = document.getElementById('subLokasiGudangSelect');
+  if (warehouseSelect) {
+    warehouseSelect.innerHTML = sortDisplayItems(
+      appState.warehouses.map((warehouse, warehouseIndex) => ({ warehouse, warehouseIndex })),
+      item => item.warehouse.nama
+    ).map(({ warehouse, warehouseIndex }) =>
+      `<option value="${warehouseIndex}">${cekEsc(warehouse.nama)}</option>`
+    ).join('');
+  }
+  if (index < 0 && appState.warehouses.length) index = 0;
+  if (warehouseSelect && index >= 0) warehouseSelect.value = String(index);
+  pilihGudangSubLokasi(index, false);
+  pageSubLokasi = 1;
+  renderSubLokasiTable(pageSubLokasi);
+  document.getElementById('modalSubLokasi').style.display = 'flex';
+}
+
+function pilihGudangSubLokasi(index, resetPage = true) {
+  const warehouseIndex = Number(index);
+  const warehouse = Number.isInteger(warehouseIndex) ? appState.warehouses[warehouseIndex] : null;
+  subLokasiEditWarehouseIndex = warehouse ? warehouseIndex : -1;
+  document.getElementById('subLokasiGudangInfo').textContent =
+    warehouse ? `Gudang: ${warehouse.nama}` : 'Tambahkan lokasi gudang terlebih dahulu.';
+  document.getElementById('subLokasiNama').disabled = !warehouse;
+  document.getElementById('btnSimpanSubLokasi').disabled = !warehouse;
+  if (resetPage) pageSubLokasi = 1;
+  resetSubLokasiForm();
+  renderSubLokasiTable(pageSubLokasi);
+}
+
+function closeModalSubLokasi() {
+  document.getElementById('modalSubLokasi').style.display = 'none';
+  subLokasiEditWarehouseIndex = -1;
+}
+
+function resetSubLokasiForm() {
+  document.getElementById('subLokasiNama').value = '';
+  document.getElementById('subLokasiEditIndex').value = '';
+  document.getElementById('btnSimpanSubLokasi').textContent = '+ Tambah Sub Lokasi';
+}
+
+function renderSubLokasiTable(page = 1) {
+  const warehouse = appState.warehouses[subLokasiEditWarehouseIndex];
+  const tbody = document.getElementById('tabelSubLokasi');
+  if (!tbody) return;
+  const entries = warehouse && Array.isArray(warehouse.sublokasi) ? warehouse.sublokasi : [];
+  const sortedEntries = entries.map((name, index) => ({ name, index }))
+    .sort((a, b) => compareDisplayValues(a.name, b.name));
+  const pageSize = parseInt(document.getElementById('pageSizeSubLokasi')?.value, 10) || 5;
+  const totalItems = sortedEntries.length;
+  const totalPages = Math.ceil(totalItems / pageSize) || 1;
+  pageSubLokasi = Math.min(Math.max(page, 1), totalPages);
+  const startIndex = (pageSubLokasi - 1) * pageSize;
+  const endIndex = Math.min(startIndex + pageSize, totalItems);
+  const paginated = sortedEntries.slice(startIndex, endIndex);
+
+  tbody.innerHTML = paginated.length ? paginated.map(({ name, index }, rowIndex) => `
+    <tr>
+      <td>${startIndex + rowIndex + 1}</td><td>${cekEsc(name)}</td>
+      <td><code>${cekEsc(warehouse.subLokasiEan?.[name] || '-')}</code></td>
+      <td class="text-center"><div class="action-btn-group">
+        <button type="button" class="btn-warning" onclick="editSubLokasi(${index})">Edit</button>
+        <button type="button" class="btn-danger" onclick="hapusSubLokasi(${index})">Hapus</button>
+      </div></td>
+    </tr>`).join('') : '<tr><td colspan="4" class="cek-empty">Belum ada sub lokasi. Penggunaan sub lokasi bersifat opsional.</td></tr>';
+
+  updatePaginationControls(
+    pageSubLokasi, totalPages,
+    document.getElementById('btnPrevSubLokasi'), document.getElementById('btnNextSubLokasi'),
+    document.getElementById('indicatorSubLokasiPage'), document.getElementById('infoSubLokasiPage'),
+    startIndex, endIndex, totalItems
+  );
+}
+
+function changeSubLokasiPage(delta) {
+  renderSubLokasiTable(pageSubLokasi + delta);
+}
+
+function simpanSubLokasi(event) {
+  event.preventDefault();
+  const warehouse = appState.warehouses[subLokasiEditWarehouseIndex];
+  const name = document.getElementById('subLokasiNama').value.trim();
+  if (!warehouse || !name) return;
+  if (!Array.isArray(warehouse.sublokasi)) warehouse.sublokasi = [];
+  if (!warehouse.subLokasiEan || typeof warehouse.subLokasiEan !== 'object') warehouse.subLokasiEan = {};
+  const editIndex = document.getElementById('subLokasiEditIndex').value;
+  const oldName = editIndex === '' ? '' : warehouse.sublokasi[Number(editIndex)];
+  if (warehouse.sublokasi.some((item, index) => item.toLowerCase() === name.toLowerCase() && index !== Number(editIndex))) {
+    return alert('Nama sub lokasi sudah terdaftar di gudang ini.');
+  }
+  if (editIndex === '') {
+    const barcode = generateSubLocationEan(warehouse);
+    if (!barcode) {
+      return alert('EAN sub lokasi tidak dapat dibuat. Pastikan EAN gudang terdiri dari 13 digit angka dan nomor sub lokasi belum mencapai batas 999.');
+    }
+    warehouse.sublokasi.push(name);
+    warehouse.subLokasiEan[name] = barcode;
+  } else {
+    warehouse.sublokasi[Number(editIndex)] = name;
+    if (warehouse.subLokasiEan[oldName]) {
+      warehouse.subLokasiEan[name] = warehouse.subLokasiEan[oldName];
+      delete warehouse.subLokasiEan[oldName];
+    }
+    appState.transactions.forEach(transaction => {
+      if (transaction.gudang === warehouse.nama && transaction.sub_lokasi === oldName) transaction.sub_lokasi = name;
+    });
+    appState.pendingTransfers.forEach(transfer => {
+      if (transfer.gudang_asal === warehouse.nama && transfer.sub_lokasi_asal === oldName) transfer.sub_lokasi_asal = name;
+      if (transfer.gudang_tujuan === warehouse.nama && transfer.sub_lokasi_tujuan === oldName) transfer.sub_lokasi_tujuan = name;
+    });
+  }
+  saveData();
+  resetSubLokasiForm();
+  renderSubLokasiTable();
+  renderSubLocationPickers();
+}
+
+function editSubLokasi(index) {
+  const warehouse = appState.warehouses[subLokasiEditWarehouseIndex];
+  if (!warehouse || !warehouse.sublokasi[index]) return;
+  document.getElementById('subLokasiNama').value = warehouse.sublokasi[index];
+  document.getElementById('subLokasiEditIndex').value = String(index);
+  document.getElementById('btnSimpanSubLokasi').textContent = 'Simpan Perubahan';
+}
+
+function hapusSubLokasi(index) {
+  const warehouse = appState.warehouses[subLokasiEditWarehouseIndex];
+  if (!warehouse || !warehouse.sublokasi[index]) return;
+  const name = warehouse.sublokasi[index];
+  if (appState.transactions.some(transaction => transaction.gudang === warehouse.nama && transaction.sub_lokasi === name) ||
+      appState.pendingTransfers.some(transfer =>
+        (transfer.gudang_asal === warehouse.nama && transfer.sub_lokasi_asal === name) ||
+        (transfer.gudang_tujuan === warehouse.nama && transfer.sub_lokasi_tujuan === name)
+      )) {
+    return alert('Sub lokasi ini sudah dipakai pada transaksi dan tidak dapat dihapus. Edit nama jika perlu.');
+  }
+  bukaModalGeneralDelete(`Hapus sub lokasi "${name}" dari ${warehouse.nama}?`, () => {
+    warehouse.sublokasi.splice(index, 1);
+    delete warehouse.subLokasiEan[name];
+    saveData();
+    renderSubLokasiTable();
+    renderSubLocationPickers();
+  });
+}
+
+function renderSubLocationPicker(selectId, warehouseName, selectedValue = '') {
+  const select = document.getElementById(selectId);
+  if (!select) return;
+  const warehouse = appState.warehouses.find(item => item.nama === warehouseName);
+  const names = warehouse && Array.isArray(warehouse.sublokasi) ? warehouse.sublokasi : [];
+  const options = ['<option value="">-- Tanpa Sub Lokasi --</option>'].concat(names.map(name =>
+    `<option value="${cekEsc(name)}">${cekEsc(name)}</option>`
+  ));
+  select.innerHTML = options.join('');
+  select.value = names.includes(selectedValue) ? selectedValue : '';
+  const wrapper = select.closest('div');
+  if (wrapper) {
+    const isTransferDestination = selectId === 'selectSubLokasiTujuan';
+    const show = names.length && (!isTransferDestination || document.getElementById('tipeTrans')?.value === 'TRANSFER');
+    wrapper.style.display = show ? '' : 'none';
+  }
+}
+
+function getSubLocations(warehouseName) {
+  const warehouse = appState.warehouses.find(item => item.nama === warehouseName);
+  return warehouse && Array.isArray(warehouse.sublokasi) ? warehouse.sublokasi : [];
+}
+
+function renderSubLocationPickers() {
+  [
+    ['selectSubLokasiMain', document.getElementById('selectGudangMain')?.value || ''],
+    ['mfgSubLokasi', document.getElementById('mfgGudang')?.value || ''],
+    ['cekTrfSubLokasi', document.getElementById('cekTrfGudang')?.value || ''],
+    ['cekTrfTujuanSubLokasi', document.getElementById('cekTrfTujuan')?.value || ''],
+    ['selectSubLokasiTujuan', document.getElementById('selectGudangTujuan')?.value || ''],
+    ['cekScanSubLokasi', document.getElementById('cekScanWarehouse')?.value || ''],
+    ['cekScanDestinationSubLokasi', document.getElementById('cekScanDestination')?.value || ''],
+    ['pdaEcomSubLokasi', document.getElementById('pdaEcomGudangPilih')?.value || ''],
+    ['pdaReturSubLokasi', document.getElementById('pdaReturGudang')?.value || '']
+  ].forEach(([id, warehouse]) => renderSubLocationPicker(id, warehouse));
+}
+
 function openModalEditGudang(index) {
   const gudang = appState.warehouses[index];
   if (!gudang) return;
@@ -1384,7 +1637,7 @@ function simpanEditMasterGudang(e) {
     if (isDuplicate) return alert("Nama lokasi gudang sudah terdaftar!");
 
     const oldNama = appState.warehouses[index].nama;
-    appState.warehouses[index] = { nama: namaBaru, ean: eanBaru };
+    appState.warehouses[index] = { ...appState.warehouses[index], nama: namaBaru, ean: eanBaru };
 
     if (oldNama !== namaBaru) {
       if (appState.pdaEcomWarehouse === oldNama) appState.pdaEcomWarehouse = namaBaru;
@@ -1392,6 +1645,10 @@ function simpanEditMasterGudang(e) {
 
       appState.transactions.forEach(t => {
         if (t.gudang === oldNama) t.gudang = namaBaru;
+      });
+      appState.pendingTransfers.forEach(transfer => {
+        if (transfer.gudang_asal === oldNama) transfer.gudang_asal = namaBaru;
+        if (transfer.gudang_tujuan === oldNama) transfer.gudang_tujuan = namaBaru;
       });
     }
 
@@ -1945,6 +2202,246 @@ function tambahMasterBarang(e) {
   renderLaporanStok(1);
 }
 
+function openModalSetSku(baseSku = '') {
+  const componentSelect = document.getElementById('setSkuKomponen');
+  componentSelect.innerHTML = `<option value="">-- Pilih Produk Komponen --</option>` +
+    sortDisplayItems(appState.masterBarang, product => product.sku).map(product =>
+      `<option value="${cekEsc(product.sku)}">${cekEsc(product.sku)} - ${cekEsc(product.nama)}</option>`
+    ).join('');
+  componentSelect.value = baseSku;
+  document.getElementById('setSkuJumlah').value = '';
+  document.getElementById('setSkuBarcode').value = '';
+  document.getElementById('setSkuNama').value = '';
+  document.getElementById('setSkuUom').innerHTML = getUomOptionsHtml('BOX');
+  updateSetSkuPreview();
+  document.getElementById('modalSetSku').style.display = 'flex';
+}
+
+function closeModalSetSku() {
+  document.getElementById('modalSetSku').style.display = 'none';
+}
+
+function openModalSkuBarcodeRules() {
+  if (!currentUser || currentUser.role !== 'superadmin') return alert('Akses ditolak. Master Prefix SKU hanya untuk Superadmin.');
+  const productSelect = document.getElementById('skuBarcodeProduct');
+  productSelect.innerHTML = '<option value="">-- Pilih SKU Master --</option>' +
+    sortDisplayItems(appState.masterBarang, product => product.sku).map(product =>
+      `<option value="${cekEsc(product.sku)}">${cekEsc(product.sku)} - ${cekEsc(product.nama)}</option>`
+    ).join('');
+  renderSkuBarcodeRules();
+  resetSkuBarcodeRuleForm();
+  document.getElementById('modalSkuBarcodeRules').style.display = 'flex';
+}
+
+function closeModalSkuBarcodeRules() {
+  document.getElementById('modalSkuBarcodeRules').style.display = 'none';
+}
+
+function resetSkuBarcodeRuleForm() {
+  document.getElementById('skuBarcodeRuleEditIndex').value = '';
+  document.getElementById('skuBarcodePrefix').value = '';
+  document.getElementById('skuBarcodeProduct').value = '';
+  document.getElementById('skuBarcodeSkuStart').value = '1';
+  document.getElementById('skuBarcodeSkuLength').value = '5';
+  document.getElementById('skuBarcodeQtyStart').value = '6';
+  document.getElementById('skuBarcodeQtyLength').value = '2';
+  document.getElementById('skuBarcodeDateStart').value = '8';
+  document.getElementById('skuBarcodeDateLength').value = '6';
+  document.getElementById('btnSaveSkuBarcodeRule').textContent = '+ Tambah Aturan';
+  updateSkuBarcodeRulePreview();
+}
+
+function updateSkuBarcodeRulePreview() {
+  const prefix = document.getElementById('skuBarcodePrefix')?.value.trim().toUpperCase() || 'FG001';
+  const sku = document.getElementById('skuBarcodeProduct')?.value || 'SKU';
+  const skuStart = Number(document.getElementById('skuBarcodeSkuStart')?.value) || 1;
+  const skuLength = Number(document.getElementById('skuBarcodeSkuLength')?.value) || prefix.length;
+  const qtyStart = Number(document.getElementById('skuBarcodeQtyStart')?.value) || 6;
+  const qtyLength = Number(document.getElementById('skuBarcodeQtyLength')?.value) || 2;
+  const dateStart = Number(document.getElementById('skuBarcodeDateStart')?.value) || 8;
+  const dateLength = Number(document.getElementById('skuBarcodeDateLength')?.value) || 6;
+  const preview = document.getElementById('skuBarcodeRulePreview');
+  if (!preview) return;
+  const qtyExample = '24'.padStart(qtyLength, '0');
+  const dateExample = '261015'.padStart(dateLength, '0');
+  const sampleLength = Math.max(skuStart + skuLength - 1, qtyStart + qtyLength - 1, dateStart + dateLength - 1);
+  const sample = Array(sampleLength).fill('_');
+  Array.from(prefix).forEach((character, index) => { sample[skuStart - 1 + index] = character; });
+  Array.from(qtyExample).forEach((character, index) => { sample[qtyStart - 1 + index] = character; });
+  Array.from(dateExample).forEach((character, index) => { sample[dateStart - 1 + index] = character; });
+  preview.textContent = `Contoh scan: ${sample.join('')} → ${sku}, Qty ${qtyExample}, tanggal produksi 20YY-MM-DD.`;
+}
+
+function skuBarcodeRangeLabel(start, length) {
+  const first = Number(start);
+  const size = Number(length);
+  return first > 0 && size > 0 ? `${first}-${first + size - 1}` : '-';
+}
+
+function renderSkuBarcodeRules() {
+  const tbody = document.getElementById('tabelSkuBarcodeRules');
+  if (!tbody) return;
+  const rules = Array.isArray(appState.skuBarcodeRules) ? appState.skuBarcodeRules : [];
+  tbody.innerHTML = rules.length ? rules.map((rule, index) => {
+    const product = findMasterBarang(rule.sku);
+    return `<tr>
+      <td><code>${cekEsc(rule.prefix || '')}</code></td>
+      <td>${cekEsc(rule.sku || '')} - ${cekEsc(product?.nama || 'SKU tidak ditemukan')}</td>
+      <td>${skuBarcodeRangeLabel(rule.sku_start, rule.sku_length)}</td>
+      <td>${skuBarcodeRangeLabel(rule.quantity_start, rule.quantity_length)}</td>
+      <td>${skuBarcodeRangeLabel(rule.date_start, rule.date_length)}</td>
+      <td class="text-center"><div class="action-btn-group">
+        <button type="button" class="btn-warning" onclick="editSkuBarcodeRule(${index})">Edit</button>
+        <button type="button" class="btn-danger" onclick="hapusSkuBarcodeRule(${index})">Hapus</button>
+      </div></td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="6" class="cek-empty">Belum ada aturan prefix SKU.</td></tr>';
+}
+
+function editSkuBarcodeRule(index) {
+  const rule = appState.skuBarcodeRules?.[index];
+  if (!rule) return;
+  document.getElementById('skuBarcodeRuleEditIndex').value = String(index);
+  document.getElementById('skuBarcodePrefix').value = rule.prefix || '';
+  document.getElementById('skuBarcodeProduct').value = rule.sku || '';
+  document.getElementById('skuBarcodeSkuStart').value = String(rule.sku_start || 1);
+  document.getElementById('skuBarcodeSkuLength').value = String(rule.sku_length || (rule.prefix || '').length);
+  document.getElementById('skuBarcodeQtyStart').value = String(rule.quantity_start || 6);
+  document.getElementById('skuBarcodeQtyLength').value = String(rule.quantity_length || 2);
+  document.getElementById('skuBarcodeDateStart').value = String(rule.date_start || 8);
+  document.getElementById('skuBarcodeDateLength').value = String(rule.date_length || 6);
+  document.getElementById('btnSaveSkuBarcodeRule').textContent = 'Simpan Perubahan';
+  updateSkuBarcodeRulePreview();
+}
+
+function simpanSkuBarcodeRule(event) {
+  event.preventDefault();
+  if (!currentUser || currentUser.role !== 'superadmin') return alert('Akses ditolak. Master Prefix SKU hanya untuk Superadmin.');
+  const rule = {
+    prefix: document.getElementById('skuBarcodePrefix').value.trim().toUpperCase(),
+    sku: document.getElementById('skuBarcodeProduct').value,
+    sku_start: Number(document.getElementById('skuBarcodeSkuStart').value),
+    sku_length: Number(document.getElementById('skuBarcodeSkuLength').value),
+    quantity_start: Number(document.getElementById('skuBarcodeQtyStart').value),
+    quantity_length: Number(document.getElementById('skuBarcodeQtyLength').value),
+    date_start: Number(document.getElementById('skuBarcodeDateStart').value),
+    date_length: Number(document.getElementById('skuBarcodeDateLength').value)
+  };
+  const editIndex = document.getElementById('skuBarcodeRuleEditIndex').value;
+  const ranges = [
+    { start: rule.sku_start, length: rule.sku_length },
+    { start: rule.quantity_start, length: rule.quantity_length },
+    { start: rule.date_start, length: rule.date_length }
+  ];
+  const rangesValid = ranges.every(range => Number.isInteger(range.start) && range.start > 0 &&
+    Number.isInteger(range.length) && range.length > 0);
+  const rangesOverlap = ranges.some((range, index) => ranges.slice(index + 1).some(other =>
+    range.start < other.start + other.length && other.start < range.start + range.length
+  ));
+  if (!rule.prefix || !findMasterBarang(rule.sku) || !rangesValid ||
+      rule.prefix.length !== rule.sku_length || rule.date_length !== 6) {
+    return alert('Isi prefix, pilih SKU master, samakan panjang range SKU dengan jumlah karakter prefix, dan gunakan tanggal 6 digit YYMMDD.');
+  }
+  if (rangesOverlap) return alert('Range SKU, jumlah, dan tanggal tidak boleh saling tumpang tindih.');
+  const editingIndex = editIndex === '' ? -1 : Number(editIndex);
+  if (appState.skuBarcodeRules.some((existing, index) =>
+    index !== editingIndex && String(existing.prefix || '').toUpperCase() === rule.prefix
+  )) return alert('Prefix barcode tersebut sudah digunakan.');
+
+  if (editIndex === '') appState.skuBarcodeRules.push(rule);
+  else appState.skuBarcodeRules[Number(editIndex)] = rule;
+  saveData();
+  renderSkuBarcodeRules();
+  resetSkuBarcodeRuleForm();
+  alert(editIndex === '' ? 'Aturan Master Prefix SKU berhasil ditambahkan.' : 'Aturan Master Prefix SKU berhasil diperbarui.');
+}
+
+function hapusSkuBarcodeRule(index) {
+  const rule = appState.skuBarcodeRules?.[index];
+  if (!rule) return;
+  bukaModalGeneralDelete(`Hapus aturan prefix barcode "${rule.prefix}"?`, () => {
+    appState.skuBarcodeRules.splice(index, 1);
+    saveData();
+    renderSkuBarcodeRules();
+    resetSkuBarcodeRuleForm();
+  });
+}
+
+function updateSetSkuOptions() {
+  const select = document.getElementById('setSkuUom');
+  if (select) select.innerHTML = getUomOptionsHtml(select.value || 'BOX');
+}
+
+function updateSetSkuPreview() {
+  const skuInput = document.getElementById('setSkuKode');
+  const componentSku = document.getElementById('setSkuKomponen')?.value || '';
+  const component = findMasterBarang(componentSku);
+  const qty = parseLocalizedNumber(document.getElementById('setSkuJumlah')?.value);
+  if (!component) {
+    skuInput.value = '';
+    return;
+  }
+  const setCount = appState.masterBarang.reduce((max, product) =>
+    product.set_component_sku === component.sku ? Math.max(max, Number(product.set_number) || 0) : max, 0) + 1;
+  const safeSku = component.sku.trim().replace(/[^a-zA-Z0-9._-]+/g, '-');
+  skuInput.value = `SET-${safeSku}-${setCount}`;
+  const nameInput = document.getElementById('setSkuNama');
+  if (nameInput && (!nameInput.value || nameInput.dataset.generated === 'true')) {
+    const qtyLabel = Number.isFinite(qty) ? formatQtyDisplay(qty) : '';
+    const uom = document.getElementById('setSkuUom')?.value || 'BOX';
+    nameInput.value = qtyLabel ? `${qtyLabel} ${component.uom || 'PCS'} ${component.nama} / ${uom} (SET ${setCount})` : `${component.nama} (SET ${setCount})`;
+    nameInput.dataset.generated = 'true';
+  }
+}
+
+function simpanSetSku(event) {
+  event.preventDefault();
+  const component = findMasterBarang(document.getElementById('setSkuKomponen').value);
+  const quantity = parseLocalizedNumber(document.getElementById('setSkuJumlah').value);
+  const sku = document.getElementById('setSkuKode').value.trim();
+  const name = document.getElementById('setSkuNama').value.trim();
+  const barcode = document.getElementById('setSkuBarcode').value.trim() || '-';
+  const uom = document.getElementById('setSkuUom').value || 'BOX';
+  if (!component || !Number.isFinite(quantity) || quantity <= 0 || !sku || !name) {
+    return alert('Pilih produk dan masukkan jumlah set yang valid (lebih dari 0).');
+  }
+  if (appState.masterBarang.some(product => product.sku.toLowerCase() === sku.toLowerCase())) {
+    return alert(`SKU set "${sku}" sudah ada. Perbarui data lalu coba lagi.`);
+  }
+  if (!barcode || barcode === '-') return alert('EAN unik wajib diisi untuk setiap Set SKU.');
+  if (appState.masterBarang.some(product => String(product.barcode || '').toLowerCase() === barcode.toLowerCase())) {
+    return alert('EAN set sudah digunakan oleh produk lain.');
+  }
+  const setNumber = Number(sku.slice(sku.lastIndexOf('-') + 1));
+  appState.masterBarang.push({
+    sku, nama: name, barcode, kategori_produk: component.kategori_produk, uom,
+    set_component_sku: component.sku, set_component_qty: quantity, set_number: setNumber
+  });
+  appState.bundleMapping = (appState.bundleMapping || []).filter(bundle =>
+    String(bundle.bundle_sku || bundle.sku_combo || bundle.sku || '').toLowerCase() !== sku.toLowerCase()
+  );
+  appState.bundleMapping.push({ bundle_sku: sku, items: [{ sku: component.sku, qty: quantity }] });
+  saveData();
+  closeModalSetSku();
+  renderMasterBarangTabel(pageBarang);
+  renderBarangDropdownOptions();
+  renderBundleMappingTabel(pageBundle);
+  renderLaporanStok(1);
+  alert(`Set SKU ${sku} berhasil dibuat sebagai ${formatQtyDisplay(quantity)} ${component.uom || 'PCS'} per ${uom}.`);
+}
+
+function parseLocalizedNumber(value) {
+  const normalized = String(value ?? '').trim().replace(/\s/g, '').replace(',', '.');
+  if (!normalized) return NaN;
+  const number = Number(normalized);
+  return Number.isFinite(number) ? number : NaN;
+}
+
+function formatQtyDisplay(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? new Intl.NumberFormat('id-ID', { maximumFractionDigits: 6 }).format(number) : String(value ?? '');
+}
+
 function renderMasterBarangTabel(page = 1) {
   pageBarang = page;
   const tbody = document.getElementById("tabelMasterBarang");
@@ -2037,6 +2534,11 @@ function simpanEditMasterBarang(e) {
     if (oldSKU !== newSKU && appState.masterBarang.some(b => b.sku.toLowerCase() === newSKU.toLowerCase())) {
       return alert("Kode SKU baru sudah digunakan!");
     }
+    if (oldSKU !== newSKU) {
+      (appState.skuBarcodeRules || []).forEach(rule => {
+        if (rule.sku === oldSKU) rule.sku = newSKU;
+      });
+    }
     item.sku = newSKU;
     item.nama = newNama;
     item.barcode = newBarcode;
@@ -2053,6 +2555,9 @@ function simpanEditMasterBarang(e) {
 }
 
 function hapusMasterBarang(sku) {
+  if ((appState.skuBarcodeRules || []).some(rule => rule.sku === sku)) {
+    return alert(`SKU "${sku}" masih digunakan pada Master Prefix SKU. Hapus atau ubah aturan prefix terlebih dahulu.`);
+  }
   bukaModalGeneralDelete(`Apakah Anda yakin ingin menghapus barang SKU "${sku}"?`, () => {
     appState.masterBarang = appState.masterBarang.filter(b => b.sku !== sku);
     saveData();
@@ -2203,7 +2708,7 @@ function tambahBarisBOMItem(skuDefault = "", qtyDefault = 1) {
       </div>
       <div style="flex:1;">
         <label>Qty Dibutuhkan <span class="row-uom-tag">(UoM)</span></label>
-        <input class="bom-row-qty" type="number" step="any" min="0.0001" value="${qtyDefault}" required>
+        <input class="bom-row-qty" type="text" inputmode="decimal" value="${String(qtyDefault).replace('.', ',')}" required>
       </div>
       <div>
         <button type="button" class="btn-danger" style="margin-top:20px;" onclick="document.getElementById('${rowId}').remove()">Hapus</button>
@@ -2242,7 +2747,7 @@ function tambahBarisEditBOMItem(skuDefault = "", qtyDefault = 1) {
       </div>
       <div style="flex:1;">
         <label>Qty Dibutuhkan <span class="row-uom-tag">(UoM)</span></label>
-        <input class="edit-bom-row-qty" type="number" step="any" min="0.0001" value="${qtyDefault}" required>
+        <input class="edit-bom-row-qty" type="text" inputmode="decimal" value="${String(qtyDefault).replace('.', ',')}" required>
       </div>
       <div>
         <button type="button" class="btn-danger" style="margin-top:20px;" onclick="document.getElementById('${rowId}').remove()">Hapus</button>
@@ -2271,11 +2776,14 @@ function tambahMasterBOM(e) {
   }
 
   const items = [];
+  let valid = true;
   rows.forEach(r => {
     const sku = r.querySelector(".bom-row-sku").value;
-    const qty = Number(r.querySelector(".bom-row-qty").value) || 1;
+    const qty = parseLocalizedNumber(r.querySelector(".bom-row-qty").value);
+    if (!Number.isFinite(qty) || qty <= 0) valid = false;
     if (sku) items.push({ sku, qty });
   });
+  if (!valid) return alert("Qty komponen BOM harus berupa angka lebih dari 0. Gunakan koma atau titik untuk desimal, misalnya 10,1.");
 
   if (!appState.masterBOM) appState.masterBOM = [];
 
@@ -2336,11 +2844,14 @@ function simpanEditMasterBOM(e) {
   }
 
   const items = [];
+  let valid = true;
   rows.forEach(r => {
     const sku = r.querySelector(".edit-bom-row-sku").value;
-    const qty = Number(r.querySelector(".edit-bom-row-qty").value) || 1;
+    const qty = parseLocalizedNumber(r.querySelector(".edit-bom-row-qty").value);
+    if (!Number.isFinite(qty) || qty <= 0) valid = false;
     if (sku) items.push({ sku, qty });
   });
+  if (!valid) return alert("Qty komponen BOM harus berupa angka lebih dari 0. Gunakan koma atau titik untuk desimal, misalnya 10,1.");
 
   const bomObj = (appState.masterBOM || []).find(b => b.id == id);
   if (bomObj) {
@@ -2399,7 +2910,7 @@ function renderMasterBOMTabel(page = 1) {
   } else {
     paginated.forEach((b, idx) => {
       const realIndex = startIndex + idx + 1;
-      const detail = (b.items || []).map(i => `${i.qty}x ${i.sku}`).join(" + ");
+      const detail = (b.items || []).map(i => `${formatQtyDisplay(i.qty)}x ${i.sku}`).join(" + ");
       tbody.innerHTML += `
         <tr>
           <td class="text-center">${realIndex}</td>
@@ -2933,6 +3444,10 @@ function renderMasterDropdowns() {
       : '';
   }
   if (pdaReturGudang) pdaReturGudang.innerHTML = htmlGudang;
+  const scanWarehouse = document.getElementById('cekScanWarehouse');
+  if (scanWarehouse) scanWarehouse.innerHTML = htmlGudang;
+  const scanDestination = document.getElementById('cekScanDestination');
+  if (scanDestination) scanDestination.innerHTML = htmlGudang;
 
   const sortedWarehouses = appState.warehouses.slice().sort((a, b) =>
     a.nama.localeCompare(b.nama, 'id', { numeric: true, sensitivity: 'base' })
@@ -2998,6 +3513,8 @@ function renderMasterDropdowns() {
   if (selectMbUom) selectMbUom.innerHTML = getUomOptionsHtml(selectMbUom.value || 'PCS');
   if (editMasterUom) editMasterUom.innerHTML = getUomOptionsHtml(editMasterUom.value);
 
+  renderSubLocationPickers();
+  updateSetSkuOptions();
   updatePDAScanViewDefaults();
 }
 
@@ -3157,8 +3674,9 @@ function tambahBarisInput() {
     <div class="item-row" id="${rowId}">
       <div style="flex:2;">
         <label>Pilih SKU / Kode Barang</label>
-        <select class="row-sku-select" onchange="autofillBarangRow(this, '${rowId}')" required></select>
+        <select class="row-sku-select" onchange="handleTransactionSkuChange(this, '${rowId}')" required></select>
         <div class="status-stock-alert" style="display:none; font-size:11px; margin-top:4px; padding:4px; background:#fee2e2; color:#b91c1c; border-radius:4px;"></div>
+        <small class="row-production-meta" style="display:none; color:#64748b;"></small>
       </div>
       <div style="flex:2;">
         <label>Nama Barang</label>
@@ -3197,6 +3715,165 @@ function tambahBarisInput() {
   renderBarangDropdownOptions();
 }
 
+function handleTransactionSkuChange(selectEl, rowId) {
+  const row = document.getElementById(rowId);
+  if (row?.dataset.barcodeSku && row.dataset.barcodeSku !== selectEl.value) {
+    delete row.dataset.barcodeSku;
+    delete row.dataset.batchNo;
+    delete row.dataset.shift;
+    delete row.dataset.tanggalProduksi;
+    const metadata = row.querySelector('.row-production-meta');
+    metadata.textContent = '';
+    metadata.style.display = 'none';
+  }
+  autofillBarangRow(selectEl, rowId);
+}
+
+function parseProductionBarcode(rawValue) {
+  const barcode = String(rawValue || '').replace(/\s/g, '').toUpperCase();
+  const configuredRules = Array.isArray(appState.skuBarcodeRules) ? appState.skuBarcodeRules : [];
+  const matchedRules = configuredRules.filter(rule => {
+    const start = Number(rule.sku_start);
+    const length = Number(rule.sku_length);
+    return rule.prefix && Number.isInteger(start) && start > 0 &&
+      Number.isInteger(length) && length > 0 &&
+      barcode.slice(start - 1, start - 1 + length) === String(rule.prefix).toUpperCase();
+  });
+  if (matchedRules.length > 1) {
+    return { error: 'Barcode cocok dengan lebih dari satu aturan Master Prefix SKU. Periksa prefix dan range SKU.' };
+  }
+  if (matchedRules.length === 1) {
+    const rule = matchedRules[0];
+    const ranges = [
+      { start: Number(rule.sku_start), length: Number(rule.sku_length) },
+      { start: Number(rule.quantity_start), length: Number(rule.quantity_length) },
+      { start: Number(rule.date_start), length: Number(rule.date_length) }
+    ];
+    const rangesValid = ranges.every(range => Number.isInteger(range.start) && range.start > 0 &&
+      Number.isInteger(range.length) && range.length > 0);
+    const rangesOverlap = ranges.some((range, index) => ranges.slice(index + 1).some(other =>
+      range.start < other.start + other.length && other.start < range.start + range.length
+    ));
+    if (!rangesValid || rangesOverlap || String(rule.prefix).length !== ranges[0].length ||
+        ranges[2].length !== 6 || barcode.length < Math.max(...ranges.map(range => range.start + range.length - 1))) {
+      return { error: 'Pengaturan range Master Prefix SKU tidak valid atau barcode terlalu pendek.' };
+    }
+    const product = findMasterBarang(rule.sku);
+    const quantityStart = Number(rule.quantity_start);
+    const quantityLength = Number(rule.quantity_length);
+    const dateStart = Number(rule.date_start);
+    const dateLength = Number(rule.date_length);
+    const quantityPart = barcode.slice(quantityStart - 1, quantityStart - 1 + quantityLength);
+    const datePart = barcode.slice(dateStart - 1, dateStart - 1 + dateLength);
+    const quantity = /^\d+$/.test(quantityPart) ? Number(quantityPart) : NaN;
+    if (!product) return { error: `SKU "${rule.sku}" pada aturan prefix tidak ditemukan di Master Barang.` };
+    if (!Number.isInteger(quantity) || quantity <= 0) return { error: 'Jumlah pada barcode harus berupa angka bulat lebih dari 0.' };
+    if (dateLength !== 6 || !/^\d{6}$/.test(datePart)) return { error: 'Tanggal produksi pada barcode harus berformat YYMMDD (6 digit).' };
+    const year = 2000 + Number(datePart.slice(0, 2));
+    const month = Number(datePart.slice(2, 4));
+    const day = Number(datePart.slice(4, 6));
+    const date = new Date(Date.UTC(year, month - 1, day));
+    if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+      return { error: 'Tanggal produksi pada barcode tidak valid.' };
+    }
+    return {
+      product,
+      quantity,
+      date: `${year}-${datePart.slice(2, 4)}-${datePart.slice(4, 6)}`,
+      batch: '',
+      shift: '',
+      source: 'sku-prefix'
+    };
+  }
+
+  const products = appState.masterBarang.slice().sort((a, b) => String(b.sku || '').length - String(a.sku || '').length);
+  const candidates = [];
+
+  products.forEach(product => {
+    const sku = String(product.sku || '').trim().toUpperCase();
+    if (!sku || !barcode.startsWith(sku)) return;
+    const suffix = barcode.slice(sku.length);
+    const shiftMatch = suffix.match(/^(\d+)([A-Z])$/);
+    if (!shiftMatch) return;
+    const numericPart = shiftMatch[1];
+    const shift = shiftMatch[2];
+
+    for (let qtyLength = 1; qtyLength <= Math.min(4, numericPart.length - 7); qtyLength++) {
+      const datePart = numericPart.slice(qtyLength, qtyLength + 6);
+      const batch = numericPart.slice(qtyLength + 6);
+      if (!/^\d{6}$/.test(datePart) || !/^\d{1,3}$/.test(batch)) continue;
+      const quantity = Number(numericPart.slice(0, qtyLength));
+      const year = 2000 + Number(datePart.slice(0, 2));
+      const month = Number(datePart.slice(2, 4));
+      const day = Number(datePart.slice(4, 6));
+      const date = new Date(Date.UTC(year, month - 1, day));
+      if (!quantity || date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) continue;
+
+      candidates.push({
+        product,
+        quantity,
+        date: `${year}-${datePart.slice(2, 4)}-${datePart.slice(4, 6)}`,
+        batch,
+        shift
+      });
+    }
+  });
+
+  if (!candidates.length) return { error: 'Barcode tidak cocok. Format yang didukung: SKU + qty + tanggal YYMMDD + batch + shift (contoh OMD2242610153P).' };
+  const longestSkuLength = Math.max(...candidates.map(candidate => String(candidate.product.sku).length));
+  const bestCandidates = candidates.filter(candidate => String(candidate.product.sku).length === longestSkuLength);
+  if (bestCandidates.length !== 1) return { error: 'Barcode memiliki lebih dari satu kemungkinan pembacaan. Periksa format SKU, qty, tanggal, batch, dan shift.' };
+  return bestCandidates[0];
+}
+
+function handleProductionBarcodeEnter(event) {
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  prosesProductionBarcode();
+}
+
+function prosesProductionBarcode() {
+  const input = document.getElementById('productionBarcodeScan');
+  const parsed = parseProductionBarcode(input.value);
+  if (parsed.error) return alert(parsed.error);
+
+  const dateInput = document.getElementById('tanggalTrans');
+  const existingRows = Array.from(document.querySelectorAll('.item-row')).filter(row =>
+    row.querySelector('.row-sku-select')?.value
+  );
+  if (parsed.source !== 'sku-prefix' && existingRows.length && dateInput.value !== parsed.date) {
+    return alert('Tanggal barcode berbeda dari transaksi yang sedang disusun. Simpan transaksi saat ini terlebih dahulu.');
+  }
+  if (parsed.source !== 'sku-prefix') dateInput.value = parsed.date;
+
+  let row = Array.from(document.querySelectorAll('.item-row')).find(item =>
+    !item.querySelector('.row-sku-select')?.value
+  );
+  if (!row) {
+    tambahBarisInput();
+    row = document.querySelector('.item-row:last-child');
+  }
+  const skuSelect = row?.querySelector('.row-sku-select');
+  if (!skuSelect || !Array.from(skuSelect.options).some(option => option.value === parsed.product.sku)) {
+    return alert(`SKU ${parsed.product.sku} tidak tersedia pada pilihan transaksi.`);
+  }
+
+  skuSelect.value = parsed.product.sku;
+  autofillBarangRow(skuSelect, row.id);
+  row.querySelector('.row-qty').value = String(parsed.quantity);
+  row.dataset.batchNo = parsed.batch;
+  row.dataset.shift = parsed.shift;
+  row.dataset.tanggalProduksi = parsed.source === 'sku-prefix' ? parsed.date : '';
+  row.dataset.barcodeSku = parsed.product.sku;
+  const metadata = row.querySelector('.row-production-meta');
+  metadata.textContent = parsed.source === 'sku-prefix'
+    ? `Barcode produksi: ${parsed.product.sku} - ${parsed.product.nama} | Qty ${parsed.quantity} | Tanggal produksi ${parsed.date}`
+    : `Barcode produksi: Batch ${parsed.batch} | Shift ${parsed.shift}${parsed.shift === 'P' ? ' (Pagi)' : ''}`;
+  metadata.style.display = 'block';
+  input.value = '';
+  input.focus();
+}
+
 function toggleTipeForm() {
   const tipe = document.getElementById("tipeTrans").value;
   document.querySelectorAll(".col-masuk").forEach(e => e.style.display = tipe === 'MASUK' ? 'block' : 'none');
@@ -3207,9 +3884,12 @@ function toggleTipeForm() {
 
   if (tipe === 'TRANSFER') {
     wrpTujuan.style.display = 'block';
+    const targetSubLocs = getSubLocations(document.getElementById('selectGudangTujuan').value);
+    document.getElementById('wrapperSubLokasiTujuan').style.display = targetSubLocs.length ? 'block' : 'none';
     lblMain.innerText = 'Pilih Gudang Pengirim';
   } else {
     wrpTujuan.style.display = 'none';
+    document.getElementById('wrapperSubLokasiTujuan').style.display = 'none';
     lblMain.innerText = 'Pilih Gudang';
   }
 
@@ -3233,6 +3913,8 @@ function simpanBatchTransaksi(shouldPrintSuratJalan = false) {
   if (tipe === 'TRANSFER' && !requireFeatureAccess('transfer_send', 'Kirim Transfer')) return;
   const gudang = document.getElementById("selectGudangMain").value;
   const gudangTujuan = document.getElementById("selectGudangTujuan").value;
+  const subLokasi = document.getElementById("selectSubLokasiMain")?.value || '';
+  const subLokasiTujuan = document.getElementById("selectSubLokasiTujuan")?.value || '';
   const tanggal = document.getElementById("tanggalTrans").value;
   let noSJ = document.getElementById("noSuratJalan").value.trim();
   const pengirim = document.getElementById("pengirimKurir").value.trim() || "-";
@@ -3283,6 +3965,9 @@ function simpanBatchTransaksi(shouldPrintSuratJalan = false) {
     const katProd = r.querySelector(".row-kat-produk").value;
     let kodeProd = r.querySelector(".row-kode-prod").value.trim();
     const qty = Number(r.querySelector(".row-qty").value);
+    const batchNo = r.dataset.batchNo || '';
+    const shift = r.dataset.shift || '';
+    const tanggalProduksi = r.dataset.tanggalProduksi || '';
 
     if (!sku) { isValid = false; return; }
     
@@ -3307,14 +3992,19 @@ function simpanBatchTransaksi(shouldPrintSuratJalan = false) {
         no_sj: noSJ,
         gudang_asal: gudang,
         gudang_tujuan: gudangTujuan,
+        sub_lokasi_asal: subLokasi,
+        sub_lokasi_tujuan: subLokasiTujuan,
         sku: sku,
         nama_barang: nama,
         kode_produksi: kodeProd,
+        batch_no: batchNo,
+        shift,
         kategori_produk: katProd,
         qty_gd: qty,
         qty_gr: 0,
         status: 'PENDING GR',
         tanggal: tanggal,
+        tanggal_produksi: tanggalProduksi,
         pengirim_kurir: pengirim,
         created_by: currentUser ? currentUser.name : 'System'
       });
@@ -3324,13 +4014,17 @@ function simpanBatchTransaksi(shouldPrintSuratJalan = false) {
         no_sj: noSJ,
         tipe: 'KELUAR',
         gudang: gudang,
+        sub_lokasi: subLokasi,
         kode: sku,
         nama_barang: nama,
         kode_produksi: kodeProd,
+        batch_no: batchNo,
+        shift,
         kategori_produk: katProd,
         tujuan_keluar: `Transfer Ke ${gudangTujuan}`,
         qty: qty,
         tanggal: tanggal,
+        tanggal_produksi: tanggalProduksi,
         foto_bukti: currentUploadedBase64Image || '',
         pengirim_kurir: pengirim,
         input_by: currentUser ? currentUser.name : 'System'
@@ -3344,14 +4038,18 @@ function simpanBatchTransaksi(shouldPrintSuratJalan = false) {
         no_sj: noSJ,
         tipe: tipe,
         gudang: gudang,
+        sub_lokasi: subLokasi,
         kode: sku,
         nama_barang: nama,
         kode_produksi: kodeProd,
+        batch_no: batchNo,
+        shift,
         kategori_produk: katProd,
         kategori_masuk: tipe === 'MASUK' ? katMasuk : '',
         tujuan_keluar: tipe === 'KELUAR' ? tujKeluar : '',
         qty: qty,
         tanggal: tanggal,
+        tanggal_produksi: tanggalProduksi,
         foto_bukti: currentUploadedBase64Image || '',
         pengirim_kurir: pengirim,
         input_by: currentUser ? currentUser.name : 'System'
@@ -3434,7 +4132,7 @@ function openModalTransactionActions(id) {
   const canEdit = !currentUser || currentUser.role === 'superadmin' || (currentUser.crud && currentUser.crud.update);
   const canDelete = !currentUser || currentUser.role === 'superadmin' || (currentUser.crud && currentUser.crud.delete);
   document.getElementById("transactionPreviewSummary").textContent =
-    `${item.no_sj || 'Tanpa SJ'} | ${item.tanggal || '-'} | ${item.kode || '-'} | ${item.gudang || '-'} | Qty ${item.qty ?? '-'}`;
+    `${item.no_sj || 'Tanpa SJ'} | ${item.tanggal || '-'} | Produksi ${item.tanggal_produksi || '-'} | ${item.kode || '-'} | ${item.gudang || '-'} | Qty ${item.qty ?? '-'}`;
   document.getElementById("btnPreviewTransactionEdit").style.display = canEdit ? 'inline-block' : 'none';
   document.getElementById("btnPreviewTransactionDelete").style.display = canDelete ? 'inline-block' : 'none';
   document.getElementById("btnPreviewTransactionPhoto").style.display = item.foto_bukti ? 'inline-block' : 'none';
@@ -3466,6 +4164,7 @@ function exportTransferApprovalExcel() {
     "No": idx + 1,
     "No SJ / Transfer ID": tr.no_sj || '-',
     "Tanggal": tr.tanggal || '-',
+    "Tanggal Produksi": tr.tanggal_produksi || '-',
     "Gudang Pengirim": tr.gudang_asal || '-',
     "Gudang Penerima": tr.gudang_tujuan || '-',
     "Kode SKU": tr.sku,
@@ -3576,9 +4275,13 @@ function bukaModalProsesReceipt(id) {
     no_sj: item.no_sj,
     tipe: 'MASUK',
     gudang: item.gudang_tujuan,
+    sub_lokasi: item.sub_lokasi_tujuan || '',
     kode: item.sku,
     nama_barang: item.nama_barang,
     kode_produksi: item.kode_produksi,
+    batch_no: item.batch_no || '',
+    shift: item.shift || '',
+    tanggal_produksi: item.tanggal_produksi || '',
     kategori_produk: item.kategori_produk,
     kategori_masuk: `Transfer Dari ${item.gudang_asal}`,
     qty: item.qty_gr,
@@ -3601,6 +4304,7 @@ function prosesManufaktur(e) {
   }
   const tahap = document.getElementById("mfgTahap").value;
   const gudang = document.getElementById("mfgGudang").value;
+  const subLokasi = document.getElementById("mfgSubLokasi")?.value || '';
   const tanggal = document.getElementById("mfgTanggal").value;
   const rows = Array.from(document.querySelectorAll(".mfg-input-row"));
   const productionInputs = rows.map(row => ({
@@ -3641,6 +4345,7 @@ function prosesManufaktur(e) {
       const masterComponent = findMasterBarang(component.sku);
       appState.transactions.push({
         id: Date.now() + Math.random(), no_sj: batchIdMfg, tipe: 'KELUAR', gudang,
+        sub_lokasi: subLokasi,
         kode: component.sku, nama_barang: masterComponent ? masterComponent.nama : component.sku,
         kode_produksi: '-', kategori_produk: masterComponent ? masterComponent.kategori_produk : 'Bahan Baku',
         tujuan_keluar: `Proses Manufaktur (${bom.nama_bom})`, qty: requiredTotal, tanggal,
@@ -3655,6 +4360,7 @@ function prosesManufaktur(e) {
     const outputProductionCode = outputCategory === 'Finish Good' ? generateKodeProduksi(outputName, tanggal) : '-';
     appState.transactions.push({
       id: Date.now() + Math.random(), no_sj: batchIdMfg, tipe: 'MASUK', gudang,
+      sub_lokasi: subLokasi,
       kode: bom.sku_hasil, nama_barang: outputName, kode_produksi: outputProductionCode,
       kategori_produk: outputCategory, kategori_masuk: `Hasil Manufaktur (${bom.nama_bom})`,
       qty, tanggal, pengirim_kurir: 'Manufaktur Internal', input_by: currentUser ? currentUser.name : 'System'
@@ -3686,6 +4392,7 @@ function openEditModal(id) {
   document.getElementById("editKategoriMasuk").value = item.kategori_masuk || '';
   document.getElementById("editTujuanKeluar").value = item.tujuan_keluar || '';
   document.getElementById("editQty").value = item.qty;
+  document.getElementById("editTanggalProduksi").value = item.tanggal_produksi || '';
   document.getElementById("editTanggal").value = item.tanggal;
 
   toggleEditTipeFields();
@@ -3743,6 +4450,7 @@ function simpanEditTransaksi(e) {
     item.kategori_masuk = item.tipe === 'MASUK' ? document.getElementById("editKategoriMasuk").value.trim() : '';
     item.tujuan_keluar = item.tipe === 'KELUAR' ? document.getElementById("editTujuanKeluar").value.trim() : '';
     item.qty = Number(document.getElementById("editQty").value);
+    item.tanggal_produksi = document.getElementById("editTanggalProduksi").value;
     item.tanggal = newTanggal;
     item.last_edit_by = currentUser ? currentUser.name : 'System';
 
@@ -3800,9 +4508,11 @@ function exportToExcel() {
     "No Surat Jalan": t.no_sj || '-',
     "Tipe": t.tipe,
     "Gudang": t.gudang,
+    "Sub Lokasi": t.sub_lokasi || '',
     "Kode SKU": t.kode,
     "Nama Barang": t.nama_barang || '-',
     "Kode Produksi": t.kode_produksi || '-',
+    "Tanggal Produksi": t.tanggal_produksi || '-',
     "Kategori Produk": t.kategori_produk,
     "UoM": uomOf(t.kode),
     "Kategori/Tujuan": t.tipe === 'MASUK' ? (t.kategori_masuk || '-') : (t.tujuan_keluar || '-'),
@@ -3880,7 +4590,7 @@ function renderDashboard(page = 1) {
   const canDelete = !currentUser || currentUser.role === 'superadmin' || (currentUser.crud && currentUser.crud.delete);
 
   if (paginatedData.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="11" style="text-align:center; color:#94a3b8; padding: 20px;">Tidak ada data transaksi yang ditemukan.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="12" style="text-align:center; color:#94a3b8; padding: 20px;">Tidak ada data transaksi yang ditemukan.</td></tr>`;
   } else {
     paginatedData.forEach((item, index) => {
       const realIndex = startIndex + index + 1;
@@ -3889,13 +4599,14 @@ function renderDashboard(page = 1) {
         <tr>
           <td class="text-center">${realIndex}</td>
           <td class="text-center"><b style="color:${item.tipe === 'MASUK' ? '#16a34a' : '#dc2626'}">${item.tipe}</b></td>
-          <td><b>${item.gudang || '-'}</b></td>
+          <td><b>${cekEsc(item.gudang || '-')}</b>${item.sub_lokasi ? `<br><small>${cekEsc(item.sub_lokasi)}</small>` : ''}</td>
           <td><code>${item.kode}</code></td>
           <td><b>${item.nama_barang || '-'}</b></td>
           <td>${item.kode_produksi || '-'}</td>
           <td>${item.kategori_produk}</td>
           <td>${item.tipe === 'MASUK' ? (item.kategori_masuk || '-') : (item.tujuan_keluar || '-')}</td>
           <td class="text-center"><b>${item.qty}</b> <span class="uom-tag">${uomOf(item.kode)}</span></td>
+          <td>${item.tanggal_produksi || '-'}</td>
           <td>${item.tanggal}</td>
           <td class="text-center">
             <button type="button" class="btn-info" onclick="openModalTransactionActions(${JSON.stringify(item.id)})">Preview</button>
@@ -4348,6 +5059,7 @@ function submitMultiScanEcom() {
       no_sj: `SJ-OUT-${currentLockedAWB}`,
       tipe: 'KELUAR',
       gudang: targetWh,
+      sub_lokasi: document.getElementById('pdaEcomSubLokasi')?.value || '',
       kode: skuFinal,
       nama_barang: namaBarang,
       kode_produksi: kodeProd,
@@ -4445,6 +5157,7 @@ function submitPDAScanRetur() {
       no_sj: `RETUR-${currentLockedReturAWB}`,
       tipe: 'MASUK',
       gudang: gudang,
+      sub_lokasi: document.getElementById('pdaReturSubLokasi')?.value || '',
       kode: sku,
       nama_barang: namaBarang,
       kode_produksi: generateKodeProduksi(namaBarang, today),
@@ -4686,6 +5399,8 @@ function handleCekEanEnter(e) {
 // CEK STOK & LOKASI: scan lokasi (search + pagination) & popup Transfer / Keluar / Terima
 // ==========================================
 let cekState = { mode: '', gudang: '', sku: '', items: [] };
+let cekScanPendingProduct = null;
+let cekScanSession = null;
 let pageCekLokasi = 1;
 let cekFotoBase64 = "";
 let cekTrfSku = "";
@@ -4941,10 +5656,24 @@ function prosesCekEan(silent = false) {
 
   if (!silent) notifyPendingTransfers(false);
 
-  const gudangObj = accessibleWarehouses.find(w => w.nama.toLowerCase() === input || (w.ean && w.ean.toLowerCase() === input));
+  const subLocationMatch = accessibleWarehouses.flatMap(warehouse =>
+    (warehouse.sublokasi || []).map(name => ({
+      warehouse,
+      name,
+      ean: warehouse.subLokasiEan?.[name] || ''
+    }))
+  ).find(item => item.name.toLowerCase() === input || item.ean.toLowerCase() === input);
+  const gudangObj = accessibleWarehouses.find(w =>
+    w.nama.toLowerCase() === input || (w.ean && w.ean.toLowerCase() === input)
+  ) || subLocationMatch?.warehouse;
   const inaccessibleWarehouse = appState.warehouses.some(w =>
     (w.nama.toLowerCase() === input || (w.ean && w.ean.toLowerCase() === input)) &&
     !accessibleWarehouses.some(allowed => allowed.nama === w.nama)
+  ) || appState.warehouses.some(warehouse =>
+    (warehouse.sublokasi || []).some(name =>
+      (name.toLowerCase() === input || String(warehouse.subLokasiEan?.[name] || '').toLowerCase() === input) &&
+      !accessibleWarehouses.some(allowed => allowed.nama === warehouse.nama)
+    )
   );
 
   if (!gudangObj && inaccessibleWarehouse) {
@@ -4955,16 +5684,26 @@ function prosesCekEan(silent = false) {
 
   if (gudangObj) {
     const targetWH = gudangObj.nama;
+    const targetSubLocation = subLocationMatch?.warehouse.nama === targetWH ? subLocationMatch.name : '';
     const whStockMap = {};
 
     appState.transactions.forEach(t => {
-      if (t.gudang.toLowerCase() === targetWH.toLowerCase()) {
+      if (t.gudang.toLowerCase() === targetWH.toLowerCase() &&
+          (!targetSubLocation || (t.sub_lokasi || '') === targetSubLocation)) {
         if (!whStockMap[t.kode]) {
           const mb = findMasterBarang(t.kode);
-          whStockMap[t.kode] = { sku: t.kode, nama: t.nama_barang || (mb ? mb.nama : t.kode), barcode: mb && mb.barcode ? mb.barcode : '', kategori: (mb && mb.kategori_produk) || t.kategori_produk || '-', stok: 0 };
+          whStockMap[t.kode] = { sku: t.kode, nama: t.nama_barang || (mb ? mb.nama : t.kode), barcode: mb && mb.barcode ? mb.barcode : '', kategori: (mb && mb.kategori_produk) || t.kategori_produk || '-', stok: 0, sub_stok: {} };
         }
-        if (t.tipe === 'MASUK') whStockMap[t.kode].stok += Number(t.qty);
-        if (t.tipe === 'KELUAR') whStockMap[t.kode].stok -= Number(t.qty);
+        const row = whStockMap[t.kode];
+        const subLocation = t.sub_lokasi || 'Tanpa Sub Lokasi';
+        if (t.tipe === 'MASUK') {
+          row.stok += Number(t.qty);
+          row.sub_stok[subLocation] = (row.sub_stok[subLocation] || 0) + Number(t.qty);
+        }
+        if (t.tipe === 'KELUAR') {
+          row.stok -= Number(t.qty);
+          row.sub_stok[subLocation] = (row.sub_stok[subLocation] || 0) - Number(t.qty);
+        }
       }
     });
 
@@ -4976,8 +5715,8 @@ function prosesCekEan(silent = false) {
 
     detailContent.innerHTML = `
       <div class="cek-summary">
-        <div class="cek-chip"><span>Lokasi Gudang</span><b>${cekEsc(targetWH)}</b></div>
-        <div class="cek-chip"><span>Barcode Gudang (EAN-13)</span><code>${cekEsc(gudangObj.ean || '-')}</code></div>
+        <div class="cek-chip"><span>${targetSubLocation ? 'Sub Lokasi' : 'Lokasi Gudang'}</span><b>${cekEsc(targetSubLocation || targetWH)}</b></div>
+        <div class="cek-chip"><span>Barcode ${targetSubLocation ? 'Sub Lokasi' : 'Gudang'} (EAN-13)</span><code>${cekEsc(targetSubLocation ? (gudangObj.subLokasiEan?.[targetSubLocation] || '-') : (gudangObj.ean || '-'))}</code></div>
         <div class="cek-chip"><span>Total SKU Terdaftar</span><b>${items.length}</b></div>
         <div class="cek-chip cek-chip-total"><span>Total Stok Fisik</span><b>${sumByUom(items, 'sku', 'stok')}</b></div>
       </div>
@@ -4996,7 +5735,7 @@ function prosesCekEan(silent = false) {
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th class="text-center">No</th><th>Kode SKU</th><th>Nama Barang</th><th class="text-center">Sisa Stok Fisik</th><th class="text-center">Aksi</th></tr></thead>
+          <thead><tr><th class="text-center">No</th><th>Kode SKU</th><th>Nama Barang</th><th class="text-center">Sisa Stok Fisik</th><th>Rincian Sub Lokasi</th><th class="text-center">Aksi</th></tr></thead>
           <tbody id="tabelCekLokasi"></tbody>
         </table>
       </div>
@@ -5012,7 +5751,9 @@ function prosesCekEan(silent = false) {
     document.getElementById("searchCekLokasi").value = keepSearch;
     fillCategoryPicker("filterCekLokasiKategori", true);
     document.getElementById("filterCekLokasiKategori").value = keepKategori;
-    document.getElementById("cekEanJudul").textContent = `Hasil Pengecekan Lokasi Gudang: ${targetWH}`;
+    document.getElementById("cekEanJudul").textContent = targetSubLocation
+      ? `Hasil Pengecekan Sub Lokasi: ${targetSubLocation} (${targetWH})`
+      : `Hasil Pengecekan Lokasi Gudang: ${targetWH}`;
     btnMain.style.display = "none";
     container.style.display = "block";
     renderCekLokasiTable(keepPage);
@@ -5021,6 +5762,14 @@ function prosesCekEan(silent = false) {
 
   const master = findMasterBarang(input);
   if (master) {
+    if (cekScanSession) {
+      tambahBarangKeSesiScan(master);
+      return;
+    }
+    if (master.set_component_sku) {
+      bukaPilihanAksiScan(master);
+      return;
+    }
     const locationsMap = {};
     accessibleWarehouses.forEach(w => locationsMap[w.nama] = 0);
 
@@ -5068,6 +5817,178 @@ function prosesCekEan(silent = false) {
     if (!silent) alert("Barcode EAN-13, SKU, atau Lokasi Gudang tidak terdaftar!");
     container.style.display = "none";
   }
+}
+
+function bukaPilihanAksiScan(product) {
+  if (!currentUser || currentUser.crud?.create === false) {
+    return alert('Akses ditolak: Anda tidak memiliki izin Create untuk transaksi scan.');
+  }
+  cekScanPendingProduct = product;
+  document.getElementById('cekScanFirstSkuInfo').textContent =
+    `Produk hasil scan: ${product.sku} - ${product.nama}. Pilih jenis transaksi untuk sesi scan berikutnya.`;
+  const warehouses = getAccessibleWarehouses();
+  const options = warehouses.map(warehouse =>
+    `<option value="${cekEsc(warehouse.nama)}">${cekEsc(warehouse.nama)}</option>`
+  ).join('');
+  document.getElementById('cekScanWarehouse').innerHTML = options;
+  document.getElementById('cekScanDestination').innerHTML = options;
+  document.getElementById('cekScanActionType').value =
+    hasFeatureAccess('transfer_receive') ? 'MASUK' : (hasFeatureAccess('transfer_send') ? 'KELUAR' : 'MASUK');
+  toggleCekScanActionFields();
+  renderSubLocationPicker('cekScanSubLokasi', warehouses[0]?.nama || '');
+  document.getElementById('modalCekScanAction').style.display = 'flex';
+}
+
+function toggleCekScanActionFields() {
+  const type = document.getElementById('cekScanActionType').value;
+  const destination = document.getElementById('cekScanDestination').value;
+  renderSubLocationPicker('cekScanDestinationSubLokasi', destination);
+  document.getElementById('cekScanDestinationWrap').style.display = type === 'TRANSFER' ? '' : 'none';
+  document.getElementById('cekScanDestinationSubLocationWrap').style.display =
+    type === 'TRANSFER' && getSubLocations(destination).length ? '' : 'none';
+}
+
+function batalCekScanAction() {
+  cekScanPendingProduct = null;
+  document.getElementById('modalCekScanAction').style.display = 'none';
+  document.getElementById('inputCekEan').focus();
+}
+
+function mulaiCekScanAction() {
+  const type = document.getElementById('cekScanActionType').value;
+  const feature = type === 'MASUK' ? 'transfer_receive' : 'transfer_send';
+  if (!requireFeatureAccess(feature, type === 'MASUK' ? 'Terima Barang' : 'Kirim / Transfer Barang')) return;
+  const warehouse = document.getElementById('cekScanWarehouse').value;
+  const destination = type === 'TRANSFER' ? document.getElementById('cekScanDestination').value : '';
+  if (!warehouse) return alert('Pilih gudang untuk sesi scan.');
+  if (type === 'TRANSFER' && (!destination || destination === warehouse)) {
+    return alert('Pilih gudang tujuan yang berbeda dari gudang asal.');
+  }
+  cekScanSession = {
+    type,
+    warehouse,
+    destination,
+    sub_lokasi: document.getElementById('cekScanSubLokasi').value || '',
+    sub_lokasi_tujuan: document.getElementById('cekScanDestinationSubLokasi').value || '',
+    items: {}
+  };
+  document.getElementById('modalCekScanAction').style.display = 'none';
+  if (cekScanPendingProduct) tambahBarangKeSesiScan(cekScanPendingProduct);
+  cekScanPendingProduct = null;
+  document.getElementById('inputCekEan').value = '';
+  document.getElementById('inputCekEan').focus();
+}
+
+function tambahBarangKeSesiScan(product) {
+  if (!cekScanSession) return;
+  const sku = product.sku;
+  if (!cekScanSession.items[sku]) cekScanSession.items[sku] = { sku, nama: product.nama, qty: 0 };
+  cekScanSession.items[sku].qty += 1;
+  const input = document.getElementById('inputCekEan');
+  if (input) {
+    input.value = '';
+    input.focus();
+  }
+  renderCekScanSession();
+}
+
+function renderCekScanSession() {
+  if (!cekScanSession) return;
+  const items = Object.values(cekScanSession.items);
+  const typeLabel = { MASUK: 'Terima Barang', TRANSFER: 'Transfer', KELUAR: 'Kirim Barang' }[cekScanSession.type];
+  document.getElementById('cekEanJudul').textContent = `Sesi Scan: ${typeLabel}`;
+  document.getElementById('cekEanDetailContent').innerHTML = `
+    <div class="cek-summary">
+      <div class="cek-chip"><span>Jenis</span><b>${typeLabel}</b></div>
+      <div class="cek-chip"><span>Gudang</span><b>${cekEsc(cekScanSession.warehouse)}</b></div>
+      ${cekScanSession.destination ? `<div class="cek-chip"><span>Tujuan</span><b>${cekEsc(cekScanSession.destination)}</b></div>` : ''}
+      <div class="cek-chip"><span>Item Terscan</span><b>${items.reduce((sum, item) => sum + item.qty, 0)}</b></div>
+    </div>
+    <div class="cek-scan-session-actions">
+      <button type="button" class="btn-primary" onclick="bukaRingkasanCekScan()">Selesai Scan / Lihat Item</button>
+      <button type="button" class="btn-danger" onclick="batalCekScanSession()">Batalkan Sesi</button>
+    </div>`;
+  document.getElementById('hasilCekEanContainer').style.display = 'block';
+}
+
+function bukaRingkasanCekScan() {
+  if (!cekScanSession) return;
+  const rows = Object.values(cekScanSession.items);
+  document.getElementById('cekScanSessionInfo').textContent =
+    `${rows.length} SKU, ${rows.reduce((sum, item) => sum + item.qty, 0)} unit di ${cekScanSession.warehouse}.`;
+  document.getElementById('cekScanSessionRows').innerHTML = rows.map(item => `
+    <tr><td><code>${cekEsc(item.sku)}</code></td><td>${cekEsc(item.nama)}</td>
+    <td>${formatQtyDisplay(item.qty)}</td><td>${cekEsc(uomOf(item.sku))}</td></tr>`).join('');
+  document.getElementById('modalCekScanFinish').style.display = 'flex';
+}
+
+function batalCekScanSession() {
+  cekScanSession = null;
+  document.getElementById('modalCekScanFinish').style.display = 'none';
+  document.getElementById('hasilCekEanContainer').style.display = 'none';
+  document.getElementById('inputCekEan').value = '';
+  document.getElementById('inputCekEan').focus();
+}
+
+function selesaiCekScanSession() {
+  if (!cekScanSession) return;
+  if (currentUser?.crud?.create === false) return alert('Akses ditolak: izin Create diperlukan.');
+  const session = cekScanSession;
+  const items = Object.values(session.items);
+  if (!items.length) return alert('Belum ada SKU yang dipindai.');
+  if (!canAccessWarehouseName(session.warehouse) ||
+      (session.type === 'TRANSFER' && !canAccessWarehouseName(session.destination))) {
+    return alert('Akses ke salah satu gudang tidak diizinkan.');
+  }
+  if ((session.type === 'TRANSFER' || session.type === 'KELUAR') && !appState.allowNegativeStock) {
+    const insufficient = items.find(item => calculateStockRealtime(item.sku, session.warehouse) < item.qty);
+    if (insufficient) return alert(`Stok ${insufficient.sku} tidak cukup di ${session.warehouse}.`);
+  }
+  const today = new Date().toISOString().split('T')[0];
+  if (!appState.allowBackdate && isBackdate(today)) return alert('Transaksi tanggal mundur tidak diizinkan.');
+  const noSJ = `SJ-SCAN-${today.replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+  const userName = currentUser ? currentUser.name : 'System';
+  items.forEach(item => {
+    const master = findMasterBarang(item.sku);
+    const kodeProd = master?.kategori_produk === 'Finish Good' ? generateKodeProduksi(master.nama, today) : '-';
+    const base = {
+      id: Date.now() + Math.random(), no_sj: noSJ, gudang: session.warehouse,
+      sub_lokasi: session.sub_lokasi, kode: item.sku, nama_barang: item.nama,
+      kode_produksi: kodeProd, kategori_produk: master?.kategori_produk || '-',
+      qty: item.qty, tanggal: today, pengirim_kurir: 'Scan Cek Stok',
+      input_by: userName
+    };
+    if (session.type === 'TRANSFER') {
+      appState.pendingTransfers.push({
+        id: Date.now() + Math.random(), no_sj: noSJ,
+        gudang_asal: session.warehouse, gudang_tujuan: session.destination,
+        sku: item.sku, nama_barang: item.nama, kode_produksi: kodeProd,
+        kategori_produk: master?.kategori_produk || '-', qty_gd: item.qty, qty_gr: 0,
+        status: 'PENDING GR', tanggal: today, pengirim_kurir: 'Scan Cek Stok',
+        created_by: userName, sub_lokasi_asal: session.sub_lokasi,
+        sub_lokasi_tujuan: session.sub_lokasi_tujuan
+      });
+      appState.transactions.push({
+        ...base, tipe: 'KELUAR', tujuan_keluar: `Transfer Ke ${session.destination}`
+      });
+    } else {
+      appState.transactions.push({
+        ...base, tipe: session.type,
+        kategori_masuk: session.type === 'MASUK' ? (appState.kategoriMasukOptions[0] || 'Penerimaan') : '',
+        tujuan_keluar: session.type === 'KELUAR' ? (appState.tujuanKeluarOptions[0] || 'Pengeluaran') : ''
+      });
+    }
+  });
+  saveData();
+  cekScanSession = null;
+  document.getElementById('modalCekScanFinish').style.display = 'none';
+  document.getElementById('hasilCekEanContainer').style.display = 'none';
+  renderDashboard(1);
+  renderLaporanStok(1);
+  renderTransferApproval(1);
+  alert(`${items.length} SKU berhasil disimpan (${noSJ}).`);
+  document.getElementById('inputCekEan').value = '';
+  document.getElementById('inputCekEan').focus();
 }
 
 function exportCekStokPdf() {
@@ -5126,13 +6047,14 @@ function renderCekLokasiTable(page = 1) {
   const endIndex = Math.min(startIndex + pageSize, totalItems);
 
   if (totalItems === 0) {
-    tbody.innerHTML = `<tr><td colspan="5" class="cek-empty">${(q || kategoriFilter) ? 'Tidak ada barang yang cocok dengan pencarian / filter kategori.' : 'Tidak ada barang di lokasi gudang ini.'}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" class="cek-empty">${(q || kategoriFilter) ? 'Tidak ada barang yang cocok dengan pencarian / filter kategori.' : 'Tidak ada barang di lokasi gudang ini.'}</td></tr>`;
   } else {
     tbody.innerHTML = filtered.slice(startIndex, endIndex).map((item, i) => `<tr>
       <td class="text-center">${startIndex + i + 1}</td>
       <td><code>${cekEsc(item.sku)}</code></td>
       <td><b>${cekEsc(item.nama)}</b></td>
       <td class="text-center">${cekStokBadge(item.stok, item.sku)}</td>
+      <td>${Object.entries(item.sub_stok || {}).map(([name, qty]) => `${cekEsc(name)}: ${formatQtyDisplay(qty)} ${cekEsc(uomOf(item.sku))}`).join('<br>') || '-'}</td>
       <td class="text-center"><button class="btn-warning" data-feature="transfer_send,transfer_receive" data-sku="${cekEsc(item.sku)}" data-wh="${cekEsc(cekState.gudang)}" onclick="bukaModalCekTransfer(this.dataset.sku, this.dataset.wh)">Transfer / Keluar / Terima</button></td>
     </tr>`).join('');
   }
@@ -5184,6 +6106,7 @@ function bukaModalCekTransfer(sku, gudang) {
   const opts = (list, selected) => list.map(v => `<option value="${cekEsc(v)}"${v === selected ? ' selected' : ''}>${cekEsc(v)}</option>`).join('');
   document.getElementById("cekTrfGudang").innerHTML = opts(srcList.map(w => w.nama), gudang);
   document.getElementById("cekTrfTujuan").innerHTML = opts(accessibleWarehouses.map(w => w.nama), '');
+  renderSubLocationPicker('cekTrfSubLokasi', gudang);
   document.getElementById("cekTrfKatMasuk").innerHTML = opts(appState.kategoriMasukOptions, '');
   document.getElementById("cekTrfTujKeluar").innerHTML = opts(appState.tujuanKeluarOptions, '');
 
@@ -5212,6 +6135,7 @@ function toggleCekTipe() {
   const src = document.getElementById("cekTrfGudang").value;
   document.getElementById("cekTrfLblGudang").textContent = tipe === 'MASUK' ? 'Lokasi Penerima' : 'Lokasi Asal';
   document.getElementById("cekTrfWrapTujuan").style.display = tipe === 'TRANSFER' ? 'flex' : 'none';
+  document.getElementById("cekTrfWrapTujuanSubLokasi").style.display = tipe === 'TRANSFER' ? 'flex' : 'none';
   document.getElementById("cekTrfWrapKatMasuk").style.display = tipe === 'MASUK' ? 'flex' : 'none';
   document.getElementById("cekTrfWrapTujKeluar").style.display = tipe === 'KELUAR' ? 'flex' : 'none';
 
@@ -5220,6 +6144,7 @@ function toggleCekTipe() {
     const alt = Array.from(tuj.options).find(o => o.value !== src);
     if (alt) tuj.value = alt.value;
   }
+  renderSubLocationPicker('cekTrfTujuanSubLokasi', tuj.value);
   updateCekStokInfo();
 }
 
@@ -5280,7 +6205,7 @@ function simpanCekTransfer(e) {
 
   const userName = currentUser ? currentUser.name : 'System';
   const base = {
-    no_sj: noSJ, gudang: gudang, kode: master.sku, nama_barang: master.nama,
+    no_sj: noSJ, gudang: gudang, sub_lokasi: document.getElementById('cekTrfSubLokasi').value || '', kode: master.sku, nama_barang: master.nama,
     kode_produksi: kodeProd, kategori_produk: master.kategori_produk,
     qty: qty, tanggal: tanggal, foto_bukti: cekFotoBase64 || '',
     pengirim_kurir: pengirim, input_by: userName
@@ -5290,7 +6215,9 @@ function simpanCekTransfer(e) {
     appState.pendingTransfers.push({
       id: Date.now() + Math.random(), no_sj: noSJ, gudang_asal: gudang, gudang_tujuan: tujuan,
       sku: master.sku, nama_barang: master.nama, kode_produksi: kodeProd, kategori_produk: master.kategori_produk,
-      qty_gd: qty, qty_gr: 0, status: 'PENDING GR', tanggal: tanggal, pengirim_kurir: pengirim, created_by: userName
+      qty_gd: qty, qty_gr: 0, status: 'PENDING GR', tanggal: tanggal, pengirim_kurir: pengirim, created_by: userName,
+      sub_lokasi_asal: document.getElementById('cekTrfSubLokasi').value || '',
+      sub_lokasi_tujuan: document.getElementById('cekTrfTujuanSubLokasi').value || ''
     });
     appState.transactions.push({ ...base, id: Date.now() + Math.random(), tipe: 'KELUAR', tujuan_keluar: `Transfer Ke ${tujuan}` });
   } else {
@@ -5750,6 +6677,31 @@ function tambahItemOpnameManual() {
 function simpanDraftOpname() {
   saveData();
   alert("Draft Hasil Stock Opname Berhasil Disimpan!");
+}
+
+function resetOpnameTerpilih() {
+  if (currentUser?.crud?.create === false) return alert('Akses ditolak: Anda tidak memiliki izin untuk mengubah data opname.');
+  const warehouse = document.getElementById('filterGudangStok')?.value || '';
+  if (!warehouse) return alert('Pilih gudang terlebih dahulu sebelum reset opname.');
+  const matches = key => {
+    const parsed = parseOpnameKey(key);
+    return parsed && (warehouse === 'semua' || parsed.gudang === warehouse);
+  };
+  const keys = new Set([
+    ...Object.keys(appState.stockOpnameData || {}).filter(matches),
+    ...Object.keys(appState.draftOpnameData || {}).filter(matches)
+  ]);
+  if (!keys.size) return alert('Tidak ada data opname untuk direset pada pilihan gudang ini.');
+  const label = warehouse === 'semua' ? 'semua gudang' : warehouse;
+  bukaModalGeneralDelete(`Hapus ${keys.size} data Stock Opname pada ${label}? Stok dan transaksi tidak akan berubah.`, () => {
+    keys.forEach(key => {
+      delete appState.stockOpnameData[key];
+      delete appState.draftOpnameData[key];
+    });
+    saveData();
+    renderLaporanStok(1);
+    alert(`Data Stock Opname pada ${label} berhasil direset.`);
+  });
 }
 
 function downloadTemplateOpnameExcel() {

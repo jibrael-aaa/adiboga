@@ -40,6 +40,8 @@ body {
 .login-field { margin-bottom: 16px; }
 .login-field label { display: block; margin-bottom: 6px; font-weight: 600; font-size: 12px; color: #334155; }
 .login-field input { width: 100%; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px; outline: none; }
+.login-field .password-toggle { margin-top: 6px; padding: 0; border: 0; background: transparent; color: #0369a1; font-size: 12px; font-weight: 600; }
+.login-field .password-toggle:hover { text-decoration: underline; }
 #btnLogin { width: 100%; padding: 12px; background: #0284c7; color: white; border: none; border-radius: 6px; font-weight: bold; font-size: 14px; cursor: pointer; }
 #btnLogin:hover { background: #0369a1; }
 .cred-hint { margin-top: 15px; padding: 10px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 11px; color: #475569; }
@@ -248,10 +250,10 @@ table th {
    CEK STOK & LOKASI
    ========================================================================== */
 .cek-head p { color: #64748b; font-size: 12px; margin: -4px 0 14px; }
-.cek-scan-bar { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; padding: 14px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; }
-.cek-scan-field { flex: 1 1 320px; min-width: 0; }
+.cek-scan-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: end; padding: 14px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; }
+.cek-scan-field { min-width: 0; }
 .cek-scan-field input { padding: 11px 12px; font-size: 14px; }
-.cek-scan-btn { padding: 11px 20px; font-size: 13px; white-space: nowrap; }
+.cek-scan-btn { width: auto; min-width: 170px; padding: 11px 20px; font-size: 13px; white-space: nowrap; }
 
 .cek-result { margin-top: 18px; padding: 16px; border: 1px solid #e2e8f0; border-radius: 8px; background: #ffffff; }
 .cek-result-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid #e2e8f0; }
@@ -292,13 +294,22 @@ table th {
 .cek-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 
 @media screen and (max-width: 768px) {
-  .cek-scan-bar { flex-direction: column; align-items: stretch; }
+  .cek-scan-bar { grid-template-columns: 1fr; }
   .cek-scan-btn { width: 100%; }
   .cek-result { padding: 12px; }
   .cek-chip-wide { grid-column: auto; }
   .cek-toolbar input { max-width: none; }
   .cek-form-grid { grid-template-columns: 1fr; }
   .cek-modal-actions button { flex: 1; }
+}
+
+.cek-scan-session-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.modal-hint { margin: 4px 0 14px; color: #64748b; font-size: 12px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+.modal-section-head .modal-hint { margin: 3px 0 0; }
+
+@media screen and (min-width: 769px) {
+  .cek-card .cek-scan-bar { min-height: 0; }
 }
 
 .system-toggle-button { min-width: 290px; text-align: center; }
@@ -313,6 +324,10 @@ table th {
 .master-bom-head, .master-data-modal-head, .modal-section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .master-bom-head h2, .master-data-modal-head h2, .modal-section-head h2 { margin: 0; }
 .master-bom-actions { margin: 12px 0; }
+.production-scan-bar { display: grid; grid-template-columns: minmax(0, 1fr); gap: 5px; margin: 0 0 14px; padding: 12px; border: 1px solid #bfdbfe; border-radius: 6px; background: #eff6ff; }
+.production-scan-bar label { margin: 0; color: #1e3a8a; font-weight: 700; }
+.production-scan-bar input { min-width: 0; }
+.production-scan-bar small { color: #475569; }
 .master-bom-actions input[type="file"] { max-width: 220px; padding: 6px; border: 1px solid #cbd5e1; border-radius: 4px; background: #f8fafc; }
 .move-products-modal { max-width: 760px; max-height: 92vh; overflow-y: auto; }
 .check-location-modal { max-width: 760px; max-height: 92vh; overflow-y: auto; }

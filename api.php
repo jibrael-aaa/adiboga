@@ -38,6 +38,7 @@ const STATE_KEYS = [
     'returRecords'         => 'all',
     'pendingTransfers'     => 'all',
     'awbPrefixRules'       => 'all',
+    'skuBarcodeRules'      => 'super',
     // Data master & pengaturan
     'masterBarang'         => 'super',
     'bundleMapping'        => 'super',
@@ -108,13 +109,15 @@ function currentSessionHash() {
 function claimUserSession(PDO $pdo, $username, $sessionHash, $previousSessionHash = null) {
     $pdo->beginTransaction();
     try {
-        $stmt = $pdo->prepare("SELECT session_hash, last_seen FROM user_sessions WHERE username = ? FOR UPDATE");
+        $stmt = $pdo->prepare("SELECT session_hash, last_seen,
+                                      (last_seen >= DATE_SUB(CURRENT_TIMESTAMP, INTERVAL " . USER_SESSION_IDLE_TIMEOUT . " SECOND)) AS is_active
+                               FROM user_sessions WHERE username = ? FOR UPDATE");
         $stmt->execute([$username]);
         $active = $stmt->fetch();
         if ($active &&
             !hash_equals($active['session_hash'], $sessionHash) &&
             ($previousSessionHash === null || !hash_equals($active['session_hash'], $previousSessionHash)) &&
-            strtotime($active['last_seen']) >= time() - USER_SESSION_IDLE_TIMEOUT) {
+            !empty($active['is_active'])) {
             $pdo->rollBack();
             return false;
         }

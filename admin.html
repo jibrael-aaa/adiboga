@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WMS Adiboga - Admin Panel</title>
     <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-    <link rel="stylesheet" href="style.css?v=20261111">
-    <link rel="stylesheet" href="admin.css?v=20261111">
+    <link rel="stylesheet" href="style.css?v=20261113">
+    <link rel="stylesheet" href="admin.css?v=20261112">
 </head>
 <body class="admin-layout">
 
@@ -24,6 +24,7 @@
       <div class="login-field">
         <label for="loginPassword">Password</label>
         <input type="password" id="loginPassword" placeholder="Masukkan password">
+        <button type="button" class="password-toggle" onclick="toggleLoginPassword()" aria-label="Tampilkan password">Tampilkan password</button>
       </div>
       
       <button id="btnLogin" onclick="handleLogin()">Login</button>
@@ -127,6 +128,7 @@
                   <th>Kategori Produk</th>
                   <th>Kategori / Tujuan</th>
                   <th>Qty</th>
+                  <th>Tanggal Produksi</th>
                   <th>Tanggal</th>
                   <th class="text-center">Aksi</th>
                 </tr>
@@ -249,6 +251,7 @@
             <button type="button" class="btn-secondary" onclick="openModalCekKategoriGudang()">Cek Kategori / Produk Gudang</button>
             <button type="button" class="btn-secondary" onclick="openModalMasterTujuanKeluar()">Master Tujuan Keluar</button>
             <button type="button" class="btn-secondary" onclick="openModalMasterTujuanMasuk()">Master Tujuan Masuk</button>
+            <button type="button" class="btn-secondary" onclick="openModalSubLokasi()">Master Sub Lokasi</button>
           </div>
           <div class="pagination-bar">
             <div class="pagination-info-group">
@@ -453,6 +456,8 @@
             </table>
           </div>
           <div class="master-product-actions">
+            <button type="button" class="btn-secondary" onclick="openModalSetSku()">+ Tambah Set SKU</button>
+            <button type="button" class="btn-secondary" onclick="openModalSkuBarcodeRules()">Master Prefix SKU</button>
             <button type="button" class="btn-secondary" onclick="openModalMasterBOM()">Master BOM</button>
             <button type="button" class="btn-secondary" onclick="openModalMasterBundle()">Master SKU Bundle</button>
             <button type="button" class="btn-secondary" onclick="openModalMasterUom()">Master UoM</button>
@@ -529,7 +534,7 @@
         <div id="modalMasterBundle" class="modal-overlay">
           <div class="modal-card master-data-modal">
             <div class="master-data-modal-head">
-            <h2>Master SKU Bundle / Combo</h2>
+            <h2>Master SKU Bundle / Set</h2>
               <button type="button" class="btn-danger" onclick="closeModalMasterBundle()">Tutup</button>
             </div>
             <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
@@ -594,14 +599,28 @@
             </div>
             <div id="wrapperGudangMain">
               <label id="lblGudangMain">Pilih Gudang</label>
-              <select id="selectGudangMain" onchange="updateAllRowStockAlerts()"></select>
+              <select id="selectGudangMain" onchange="updateAllRowStockAlerts(); renderSubLocationPicker('selectSubLokasiMain', this.value)"></select>
+            </div>
+            <div>
+              <label for="selectSubLokasiMain">Sub Lokasi (Opsional)</label>
+              <select id="selectSubLokasiMain"></select>
             </div>
             <div id="wrapperGudangTujuan" style="display:none;">
               <label>Gudang Tujuan Penerima</label>
-              <select id="selectGudangTujuan"></select>
+              <select id="selectGudangTujuan" onchange="renderSubLocationPicker('selectSubLokasiTujuan', this.value)"></select>
+            </div>
+            <div id="wrapperSubLokasiTujuan" style="display:none;">
+              <label for="selectSubLokasiTujuan">Sub Lokasi Tujuan (Opsional)</label>
+              <select id="selectSubLokasiTujuan"></select>
             </div>
             <div><label>Tanggal Transaksi</label><input id="tanggalTrans" type="date"></div>
             <div><label>No. Surat Jalan / Referensi</label><input id="noSuratJalan" type="text" placeholder="Otomatis / Manual"></div>
+          </div>
+
+          <div class="production-scan-bar">
+            <label for="productionBarcodeScan">Scan Barcode Produksi / Batch</label>
+            <input id="productionBarcodeScan" type="text" placeholder="Contoh: OMD2242610153P" autocomplete="off" onkeydown="handleProductionBarcodeEnter(event)">
+            <small>Scan barcode produksi sesuai Master Prefix SKU atau format lama SKU + qty + tanggal YYMMDD + batch + shift. Hasil scan mengisi form; transaksi disimpan setelah Anda menekan Simpan.</small>
           </div>
 
           <div style="background:#f8fafc; padding:15px; border-radius:6px; margin-bottom:15px; border:1px solid #e2e8f0;">
@@ -646,7 +665,8 @@
                   <option value="Finish Good">3. SFG &#10140; Finish Good (FG)</option>
                 </select>
               </div>
-              <div><label>Lokasi Gudang</label><select id="mfgGudang" onchange="renderMfgSummary()"></select></div>
+              <div><label>Lokasi Gudang</label><select id="mfgGudang" onchange="renderMfgSummary(); renderSubLocationPicker('mfgSubLokasi', this.value)"></select></div>
+              <div><label>Sub Lokasi (Opsional)</label><select id="mfgSubLokasi"></select></div>
               <div><label style="color:#2563eb;">Tanggal Manufaktur</label><input type="date" id="mfgTanggal" onchange="updateMfgKodeProduksiAuto()"></div>
             </div>
 
@@ -684,7 +704,8 @@
               Default tersimpan: Gudang <b id="lblPdaEcomWh" style="color:#60a5fa;">-</b> | Tujuan <b id="lblPdaEcomTujuan" style="color:#38bdf8;">-</b>
             </div>
             <div class="form-row pda-location-fields">
-              <div><label for="pdaEcomGudangPilih">Gudang Pemotong Stok</label><select id="pdaEcomGudangPilih" required></select></div>
+              <div><label for="pdaEcomGudangPilih">Gudang Pemotong Stok</label><select id="pdaEcomGudangPilih" required onchange="renderSubLocationPicker('pdaEcomSubLokasi', this.value)"></select></div>
+              <div><label for="pdaEcomSubLokasi">Sub Lokasi (Opsional)</label><select id="pdaEcomSubLokasi"></select></div>
               <div><label for="pdaEcomTujuanPilih">Tujuan Keluar</label><select id="pdaEcomTujuanPilih" required></select></div>
             </div>
 
@@ -723,7 +744,9 @@
 
             <div style="margin-bottom: 12px;">
               <label>Pilih Lokasi Gudang Masuk Retur:</label>
-              <select id="pdaReturGudang" required></select>
+              <select id="pdaReturGudang" required onchange="renderSubLocationPicker('pdaReturSubLokasi', this.value)"></select>
+              <label for="pdaReturSubLokasi" style="margin-top:8px;">Sub Lokasi (Opsional)</label>
+              <select id="pdaReturSubLokasi"></select>
             </div>
 
             <div style="margin-bottom: 15px;">
@@ -1023,6 +1046,7 @@
           </div>
 
           <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:15px; flex-wrap:wrap;">
+            <button type="button" class="btn-danger" style="padding:10px 18px; font-weight:bold; font-size:13px;" onclick="resetOpnameTerpilih()">Reset Stock Opname</button>
             <button class="btn-secondary" style="padding:10px 18px; font-weight:bold; font-size:13px;" onclick="simpanDraftOpname()">💾 Simpan Sebagai Draft</button>
             <button class="btn-warning" style="padding:10px 18px; font-weight:bold; font-size:13px;" onclick="bukaModalKonfirmasiOpname()">⚡ Eksekusi Penyesuaian Stok (Adjustment)</button>
           </div>
@@ -1226,6 +1250,62 @@
       </div>
     </div>
 
+    <div id="modalSetSku" class="modal-overlay">
+      <div class="modal-card" style="max-width:520px;">
+        <h2>Tambah Set SKU</h2>
+        <p class="modal-hint">SKU baru untuk kemasan dengan jumlah isi, UoM, dan EAN berbeda. Contoh: 24 PCS dalam 1 DUS.</p>
+        <form onsubmit="simpanSetSku(event)">
+          <div class="form-row">
+            <div><label for="setSkuKomponen">Produk Komponen</label><select id="setSkuKomponen" required onchange="updateSetSkuPreview()"></select></div>
+            <div><label for="setSkuJumlah">Jumlah per Set</label><input type="text" inputmode="decimal" id="setSkuJumlah" placeholder="24" required oninput="updateSetSkuPreview()"></div>
+          </div>
+          <div class="form-row">
+            <div><label for="setSkuKode">SKU Set (otomatis)</label><input type="text" id="setSkuKode" readonly></div>
+            <div><label for="setSkuBarcode">EAN Set</label><input type="text" id="setSkuBarcode" placeholder="Barcode unik untuk kemasan" required></div>
+          </div>
+          <div class="form-row">
+            <div><label for="setSkuUom">UoM Set</label><select id="setSkuUom"></select></div>
+            <div><label for="setSkuNama">Nama Set</label><input type="text" id="setSkuNama" required oninput="this.dataset.generated='false'"></div>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn-danger" onclick="closeModalSetSku()">Batal</button>
+            <button type="submit" class="btn-success">Simpan Set SKU</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="modalSkuBarcodeRules" class="modal-overlay">
+      <div class="modal-card" style="max-width:820px;">
+        <div class="modal-section-head">
+          <div><h2>Master Prefix SKU</h2><p class="modal-hint">Atur potongan barcode untuk SKU, jumlah, dan tanggal produksi. Contoh: FG00124261015 → FG-001, 24, 2026-10-15.</p></div>
+          <button type="button" class="btn-danger" onclick="closeModalSkuBarcodeRules()">Tutup</button>
+        </div>
+        <form onsubmit="simpanSkuBarcodeRule(event)">
+          <input type="hidden" id="skuBarcodeRuleEditIndex" value="">
+          <div class="form-row">
+            <div><label for="skuBarcodePrefix">Prefix barcode SKU</label><input id="skuBarcodePrefix" type="text" placeholder="FG001" required oninput="document.getElementById('skuBarcodeSkuLength').value=this.value.length; updateSkuBarcodeRulePreview()"></div>
+            <div><label for="skuBarcodeProduct">Alias SKU di Master Barang</label><select id="skuBarcodeProduct" required onchange="updateSkuBarcodeRulePreview()"></select></div>
+          </div>
+          <div class="form-row">
+            <div><label>Range SKU (posisi awal / panjang)</label><div class="form-row"><input id="skuBarcodeSkuStart" type="number" min="1" value="1" aria-label="Posisi awal SKU" oninput="updateSkuBarcodeRulePreview()"><input id="skuBarcodeSkuLength" type="number" min="1" value="5" aria-label="Panjang SKU" oninput="updateSkuBarcodeRulePreview()"></div></div>
+            <div><label>Range jumlah (posisi awal / panjang)</label><div class="form-row"><input id="skuBarcodeQtyStart" type="number" min="1" value="6" aria-label="Posisi awal jumlah" oninput="updateSkuBarcodeRulePreview()"><input id="skuBarcodeQtyLength" type="number" min="1" value="2" aria-label="Panjang jumlah" oninput="updateSkuBarcodeRulePreview()"></div></div>
+          </div>
+          <div class="form-row">
+            <div><label>Range tanggal produksi (posisi awal / panjang)</label><div class="form-row"><input id="skuBarcodeDateStart" type="number" min="1" value="8" aria-label="Posisi awal tanggal produksi" oninput="updateSkuBarcodeRulePreview()"><input id="skuBarcodeDateLength" type="number" min="1" value="6" aria-label="Panjang tanggal produksi" oninput="updateSkuBarcodeRulePreview()"></div></div>
+            <div id="skuBarcodeRulePreview" class="modal-hint" style="align-self:center;"></div>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn-danger" onclick="resetSkuBarcodeRuleForm()">Batal</button>
+            <button type="submit" class="btn-success" id="btnSaveSkuBarcodeRule">+ Tambah Aturan</button>
+          </div>
+        </form>
+        <div class="table-wrap">
+          <table><thead><tr><th>Prefix</th><th>SKU / Nama</th><th>Range SKU</th><th>Range Jumlah</th><th>Range Tanggal</th><th class="text-center">Aksi</th></tr></thead><tbody id="tabelSkuBarcodeRules"></tbody></table>
+        </div>
+      </div>
+    </div>
+
     <!-- MODAL PENGATURAN DEFAULT PDA -->
     <div id="modalPDADefaults" class="modal-overlay">
       <div class="modal-card pda-defaults-modal">
@@ -1347,7 +1427,8 @@
             <input type="text" id="bomNama" placeholder="Otomatis terisi awalan BOM..." required>
           </div>
 
-          <div style="font-weight:bold; margin-bottom:8px;">Komponen Bahan Asal / Komponen Penyusun:</div>
+          <div style="font-weight:bold; margin-bottom:4px;">Komponen Bahan Asal / Komponen Penyusun:</div>
+          <small class="modal-hint">Gunakan koma atau titik untuk desimal, misalnya 10,1 kg.</small>
           <div id="bomItemsContainer" style="max-height: 200px; overflow-y: auto; margin-bottom: 10px;"></div>
           <button type="button" class="btn-success" style="margin-bottom: 15px; padding: 6px 12px; font-size:13px;" onclick="tambahBarisBOMItem()">+ Tambah Komponen Bahan</button>
 
@@ -1382,6 +1463,46 @@
       </div>
     </div>
 
+    <div id="modalSubLokasi" class="modal-overlay">
+      <div class="modal-card" style="max-width:620px;">
+        <div class="modal-section-head">
+          <div><h2>Kelola Sub Lokasi</h2><p id="subLokasiGudangInfo" class="modal-hint"></p></div>
+          <button type="button" class="btn-danger" onclick="closeModalSubLokasi()">Tutup</button>
+        </div>
+        <form onsubmit="simpanSubLokasi(event)">
+          <input type="hidden" id="subLokasiEditIndex" value="">
+          <div style="margin-bottom:12px;">
+            <label for="subLokasiGudangSelect">Pilih Gudang</label>
+            <select id="subLokasiGudangSelect" onchange="pilihGudangSubLokasi(this.value)"></select>
+          </div>
+          <div class="form-row">
+            <div><label for="subLokasiNama">Nama Sub Lokasi</label><input type="text" id="subLokasiNama" placeholder="Contoh: Ruang Bahan Fresh" required></div>
+            <div style="align-self:flex-end;"><button type="submit" class="btn-success" id="btnSimpanSubLokasi">+ Tambah Sub Lokasi</button></div>
+          </div>
+        </form>
+        <div class="table-wrap">
+          <table><thead><tr><th>No</th><th>Nama Sub Lokasi</th><th>Barcode EAN-13</th><th class="text-center">Aksi</th></tr></thead><tbody id="tabelSubLokasi"></tbody></table>
+        </div>
+        <small class="modal-hint">EAN internal dibuat dari 9 digit awal barcode gudang, nomor urut 3 digit, dan digit pemeriksa. Kode ini bukan alokasi GS1; barcode gudang harus terdiri dari 13 digit angka.</small>
+        <div class="pagination-bar">
+          <div class="pagination-info-group">
+            <label style="font-size:13px; margin:0;">Per halaman:</label>
+            <select id="pageSizeSubLokasi" style="width:auto; padding:4px;" onchange="renderSubLokasiTable(1)">
+              <option value="5" selected>5</option>
+              <option value="10">10</option>
+              <option value="25">25</option>
+            </select>
+            <span id="infoSubLokasiPage">Menampilkan 0 - 0 dari 0 data</span>
+          </div>
+          <div class="pagination-controls">
+            <button id="btnPrevSubLokasi" class="btn-secondary" onclick="changeSubLokasiPage(-1)">&laquo; Sebelumnya</button>
+            <span id="indicatorSubLokasiPage">Halaman 1 / 1</span>
+            <button id="btnNextSubLokasi" class="btn-secondary" onclick="changeSubLokasiPage(1)">Selanjutnya &raquo;</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- MODAL KONFIRMASI HAPUS -->
     <div id="modalGeneralDelete" class="modal-overlay">
       <div class="modal-card" style="max-width:420px; text-align:center;">
@@ -1407,6 +1528,7 @@
           <div style="margin-bottom: 12px;" id="groupEditKatMasuk"><label>Kategori Masuk</label><input type="text" id="editKategoriMasuk"></div>
           <div style="margin-bottom: 12px;" id="groupEditTujKeluar"><label>Tujuan Keluar</label><input type="text" id="editTujuanKeluar"></div>
           <div style="margin-bottom: 12px;"><label>Jumlah Qty</label><input type="number" step="any" id="editQty" required></div>
+          <div style="margin-bottom: 12px;"><label>Tanggal Produksi</label><input type="date" id="editTanggalProduksi"></div>
           <div style="margin-bottom: 15px;"><label>Tanggal Transaksi</label><input type="date" id="editTanggal" required></div>
           <div style="display:flex; justify-content:flex-end; gap:10px;">
             <button type="button" class="btn-danger" onclick="closeModalEdit()">Batal</button>
@@ -1458,6 +1580,35 @@
     </div>
 
     <!-- MODAL CEK STOK: TRANSFER / KELUAR / TERIMA -->
+    <div id="modalCekScanAction" class="modal-overlay">
+      <div class="modal-card cek-modal-card">
+        <h3>Mulai Transaksi dari Scan</h3>
+        <p id="cekScanFirstSkuInfo" class="modal-hint"></p>
+        <div class="form-row">
+          <div><label for="cekScanActionType">Tipe Transaksi</label><select id="cekScanActionType" onchange="toggleCekScanActionFields()"><option value="MASUK">Terima Barang</option><option value="TRANSFER">Transfer</option><option value="KELUAR">Kirim Barang</option></select></div>
+          <div><label for="cekScanWarehouse">Gudang</label><select id="cekScanWarehouse" onchange="renderSubLocationPicker('cekScanSubLokasi', this.value)"></select></div>
+          <div><label for="cekScanSubLokasi">Sub Lokasi (Opsional)</label><select id="cekScanSubLokasi"></select></div>
+          <div id="cekScanDestinationWrap" style="display:none;"><label for="cekScanDestination">Gudang Tujuan</label><select id="cekScanDestination" onchange="renderSubLocationPicker('cekScanDestinationSubLokasi', this.value); toggleCekScanActionFields()"></select></div>
+          <div id="cekScanDestinationSubLocationWrap" style="display:none;"><label for="cekScanDestinationSubLokasi">Sub Lokasi Tujuan</label><select id="cekScanDestinationSubLokasi"></select></div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn-secondary" onclick="batalCekScanAction()">Batal</button>
+          <button type="button" class="btn-primary" onclick="mulaiCekScanAction()">Mulai Scan</button>
+        </div>
+      </div>
+    </div>
+    <div id="modalCekScanFinish" class="modal-overlay">
+      <div class="modal-card cek-modal-card">
+        <h3>Transaksi Scan Berjalan</h3>
+        <p id="cekScanSessionInfo" class="modal-hint"></p>
+        <div class="table-wrap"><table><thead><tr><th>SKU</th><th>Nama</th><th>Qty Scan</th><th>UoM</th></tr></thead><tbody id="cekScanSessionRows"></tbody></table></div>
+        <p class="modal-hint">Lanjutkan scan SKU atau tekan Selesai untuk menyimpan semua item.</p>
+        <div class="modal-actions">
+          <button type="button" class="btn-danger" onclick="batalCekScanSession()">Batalkan Sesi</button>
+          <button type="button" class="btn-success" onclick="selesaiCekScanSession()">Selesai & Simpan</button>
+        </div>
+      </div>
+    </div>
     <div id="modalCekTransfer" class="modal-overlay">
       <div class="modal-card cek-modal-card">
         <form onsubmit="simpanCekTransfer(event)">
@@ -1476,12 +1627,14 @@
             </div>
             <div>
               <label id="cekTrfLblGudang" for="cekTrfGudang">Lokasi Asal</label>
-              <select id="cekTrfGudang" onchange="toggleCekTipe()"></select>
+              <select id="cekTrfGudang" onchange="toggleCekTipe(); renderSubLocationPicker('cekTrfSubLokasi', this.value)"></select>
             </div>
+            <div><label for="cekTrfSubLokasi">Sub Lokasi (Opsional)</label><select id="cekTrfSubLokasi"></select></div>
             <div id="cekTrfWrapTujuan">
               <label for="cekTrfTujuan">Lokasi Tujuan Penerima</label>
-              <select id="cekTrfTujuan" onchange="updateCekStokInfo()"></select>
+              <select id="cekTrfTujuan" onchange="updateCekStokInfo(); renderSubLocationPicker('cekTrfTujuanSubLokasi', this.value)"></select>
             </div>
+            <div id="cekTrfWrapTujuanSubLokasi" style="display:none;"><label for="cekTrfTujuanSubLokasi">Sub Lokasi Tujuan (Opsional)</label><select id="cekTrfTujuanSubLokasi"></select></div>
             <div id="cekTrfWrapKatMasuk" style="display:none;">
               <label for="cekTrfKatMasuk">Kategori Masuk</label>
               <select id="cekTrfKatMasuk"></select>
@@ -1655,7 +1808,8 @@
             <label>Nama BOM / Resep</label>
             <input type="text" id="editBOMNama" required>
           </div>
-          <div style="font-weight:bold; margin-bottom:8px;">Komponen Bahan Asal / Komponen Penyusun:</div>
+          <div style="font-weight:bold; margin-bottom:4px;">Komponen Bahan Asal / Komponen Penyusun:</div>
+          <small class="modal-hint">Gunakan koma atau titik untuk desimal, misalnya 10,1 kg.</small>
           <div id="editBOMItemsContainer" style="max-height: 200px; overflow-y: auto; margin-bottom: 10px;"></div>
           <button type="button" class="btn-success" style="margin-bottom: 15px; padding: 6px 12px; font-size:13px;" onclick="tambahBarisEditBOMItem()">+ Tambah Komponen Bahan</button>
           
@@ -1669,7 +1823,7 @@
 
   </div>
 
-  <script src="script.js?v=20261111"></script>
+  <script src="script.js?v=20261110c"></script>
 
   <footer>
   <p>Testing Version 1.0</p>

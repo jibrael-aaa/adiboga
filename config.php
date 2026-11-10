@@ -101,6 +101,7 @@ function wms_state_tables() {
         'returRecords' => 'wms_returns_v2',
         'pendingTransfers' => 'wms_pending_transfers_v2',
         'awbPrefixRules' => 'wms_awb_prefix_rules_v2',
+        'skuBarcodeRules' => 'wms_sku_barcode_rules_v2',
         'masterBarang' => 'wms_master_barang_v2',
         'bundleMapping' => 'wms_bundle_mapping_v2',
         'warehouses' => 'wms_warehouses_v2',
@@ -116,14 +117,15 @@ function wms_state_columns() {
     $text = 'LONGTEXT NULL';
     $number = 'DECIMAL(30,15) NULL';
     return [
-        'transactions' => ['id' => $number, 'no_sj' => $text, 'tipe' => $text, 'gudang' => $text, 'kode' => $text, 'nama_barang' => $text, 'kode_produksi' => $text, 'kategori_produk' => $text, 'kategori_masuk' => $text, 'tujuan_keluar' => $text, 'qty' => $number, 'tanggal' => $text, 'foto_bukti' => 'LONGTEXT NULL', 'pengirim_kurir' => $text, 'input_by' => $text],
+        'transactions' => ['id' => $number, 'no_sj' => $text, 'tipe' => $text, 'gudang' => $text, 'sub_lokasi' => $text, 'kode' => $text, 'nama_barang' => $text, 'kode_produksi' => $text, 'batch_no' => $text, 'shift' => $text, 'kategori_produk' => $text, 'kategori_masuk' => $text, 'tujuan_keluar' => $text, 'qty' => $number, 'tanggal' => $text, 'tanggal_produksi' => $text, 'foto_bukti' => 'LONGTEXT NULL', 'pengirim_kurir' => $text, 'input_by' => $text],
         'pdaScans' => ['awb' => $text, 'kode_fg' => $text, 'qty' => $number, 'mode' => $text, 'date' => $text],
         'manifest' => ['tanggal' => $text, 'awb' => $text, 'sku' => $text, 'qty' => $number, 'is_bundle' => 'TINYINT(1) NULL', 'original_bundle_sku' => $text],
         'stockOpnameData' => ['gudang' => $text, 'sku' => $text, 'qty' => $number],
         'draftOpnameData' => ['gudang' => $text, 'sku' => $text, 'qty' => $number],
         'returRecords' => ['id' => $number, 'tanggal' => $text, 'awb' => $text, 'status_resi' => $text, 'tpl' => $text, 'sku' => $text, 'nama_barang' => $text, 'qty' => $number, 'gudang' => $text],
-        'pendingTransfers' => ['id' => $number, 'no_sj' => $text, 'gudang_asal' => $text, 'gudang_tujuan' => $text, 'sku' => $text, 'nama_barang' => $text, 'kode_produksi' => $text, 'kategori_produk' => $text, 'qty_gd' => $number, 'qty_gr' => $number, 'status' => $text, 'tanggal' => $text, 'pengirim_kurir' => $text, 'created_by' => $text],
+        'pendingTransfers' => ['id' => $number, 'no_sj' => $text, 'gudang_asal' => $text, 'gudang_tujuan' => $text, 'sku' => $text, 'nama_barang' => $text, 'kode_produksi' => $text, 'batch_no' => $text, 'shift' => $text, 'kategori_produk' => $text, 'qty_gd' => $number, 'qty_gr' => $number, 'status' => $text, 'tanggal' => $text, 'tanggal_produksi' => $text, 'pengirim_kurir' => $text, 'created_by' => $text, 'sub_lokasi_asal' => $text, 'sub_lokasi_tujuan' => $text],
         'awbPrefixRules' => ['prefix' => $text, 'name' => $text],
+        'skuBarcodeRules' => ['prefix' => $text, 'sku' => $text, 'sku_start' => 'INT NULL', 'sku_length' => 'INT NULL', 'quantity_start' => 'INT NULL', 'quantity_length' => 'INT NULL', 'date_start' => 'INT NULL', 'date_length' => 'INT NULL'],
         'masterBarang' => ['sku' => $text, 'nama' => $text, 'barcode' => $text, 'kategori_produk' => $text, 'uom' => $text],
         'bundleMapping' => ['bundle_sku' => $text],
         'warehouses' => ['nama' => $text, 'ean' => $text],
@@ -197,6 +199,16 @@ function wms_install_schema(PDO $pdo) {
             record_key TEXT NOT NULL,
             " . implode(",\n            ", $columns) . "
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    }
+    foreach (['transactions' => ['sub_lokasi', 'batch_no', 'shift', 'tanggal_produksi'], 'pendingTransfers' => ['sub_lokasi_asal', 'sub_lokasi_tujuan', 'batch_no', 'shift', 'tanggal_produksi']] as $key => $newColumns) {
+        $table = wms_state_tables()[$key];
+        foreach ($newColumns as $column) {
+            $stmt = $pdo->prepare("SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ? LIMIT 1");
+            $stmt->execute([$table, $column]);
+            if (!$stmt->fetch()) {
+                $pdo->exec("ALTER TABLE `$table` ADD COLUMN `$column` LONGTEXT NULL");
+            }
+        }
     }
 
     $pdo->exec("CREATE TABLE IF NOT EXISTS wms_bundle_mapping_items (

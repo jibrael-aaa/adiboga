@@ -129,10 +129,10 @@ CREATE TABLE IF NOT EXISTS wms_boms (record_order INT UNSIGNED NOT NULL PRIMARY 
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS wms_transactions_v2 (
   record_order INT UNSIGNED NOT NULL PRIMARY KEY, record_key TEXT NOT NULL,
-  id DECIMAL(30,15) NULL, no_sj LONGTEXT NULL, tipe LONGTEXT NULL, gudang LONGTEXT NULL,
-  kode LONGTEXT NULL, nama_barang LONGTEXT NULL, kode_produksi LONGTEXT NULL,
+  id DECIMAL(30,15) NULL, no_sj LONGTEXT NULL, tipe LONGTEXT NULL, gudang LONGTEXT NULL, sub_lokasi LONGTEXT NULL,
+  kode LONGTEXT NULL, nama_barang LONGTEXT NULL, kode_produksi LONGTEXT NULL, batch_no LONGTEXT NULL, shift LONGTEXT NULL,
   kategori_produk LONGTEXT NULL, kategori_masuk LONGTEXT NULL, tujuan_keluar LONGTEXT NULL,
-  qty DECIMAL(30,15) NULL, tanggal LONGTEXT NULL, foto_bukti LONGTEXT NULL,
+  qty DECIMAL(30,15) NULL, tanggal LONGTEXT NULL, tanggal_produksi LONGTEXT NULL, foto_bukti LONGTEXT NULL,
   pengirim_kurir LONGTEXT NULL, input_by LONGTEXT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS wms_pda_scans_v2 (
@@ -160,12 +160,20 @@ CREATE TABLE IF NOT EXISTS wms_returns_v2 (
 CREATE TABLE IF NOT EXISTS wms_pending_transfers_v2 (
   record_order INT UNSIGNED NOT NULL PRIMARY KEY, record_key TEXT NOT NULL,
   id DECIMAL(30,15) NULL, no_sj LONGTEXT NULL, gudang_asal LONGTEXT NULL, gudang_tujuan LONGTEXT NULL,
-  sku LONGTEXT NULL, nama_barang LONGTEXT NULL, kode_produksi LONGTEXT NULL, kategori_produk LONGTEXT NULL,
-  qty_gd DECIMAL(30,15) NULL, qty_gr DECIMAL(30,15) NULL, status LONGTEXT NULL, tanggal LONGTEXT NULL,
-  pengirim_kurir LONGTEXT NULL, created_by LONGTEXT NULL
+  sku LONGTEXT NULL, nama_barang LONGTEXT NULL, kode_produksi LONGTEXT NULL, batch_no LONGTEXT NULL, shift LONGTEXT NULL, kategori_produk LONGTEXT NULL,
+  qty_gd DECIMAL(30,15) NULL, qty_gr DECIMAL(30,15) NULL, status LONGTEXT NULL, tanggal LONGTEXT NULL, tanggal_produksi LONGTEXT NULL,
+  pengirim_kurir LONGTEXT NULL, created_by LONGTEXT NULL,
+  sub_lokasi_asal LONGTEXT NULL, sub_lokasi_tujuan LONGTEXT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS wms_awb_prefix_rules_v2 (
   record_order INT UNSIGNED NOT NULL PRIMARY KEY, record_key TEXT NOT NULL, prefix LONGTEXT NULL, name LONGTEXT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS wms_sku_barcode_rules_v2 (
+  record_order INT UNSIGNED NOT NULL PRIMARY KEY, record_key TEXT NOT NULL,
+  prefix LONGTEXT NULL, sku LONGTEXT NULL,
+  sku_start INT NULL, sku_length INT NULL,
+  quantity_start INT NULL, quantity_length INT NULL,
+  date_start INT NULL, date_length INT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS wms_master_barang_v2 (
   record_order INT UNSIGNED NOT NULL PRIMARY KEY, record_key TEXT NOT NULL, sku LONGTEXT NULL, nama LONGTEXT NULL,
