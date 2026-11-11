@@ -22,10 +22,11 @@ const defaultUsers = [
   }
 ];
 
-const FEATURE_ACCESS_KEYS = ['export', 'import', 'pdf', 'pda_ecommerce', 'pda_retur', 'transfer_send', 'transfer_receive'];
+const FEATURE_ACCESS_KEYS = ['export', 'import', 'pdf', 'pda_ecommerce', 'pda_retur', 'transfer_send', 'transfer_receive', 'outbound_input', 'custom_barcode'];
 
 function hasFeatureAccess(feature) {
   if (!currentUser || currentUser.role === 'superadmin') return true;
+  if (feature === 'custom_barcode') return currentUser.crud?.custom_barcode === true;
   return currentUser.crud?.[feature] !== false;
 }
 
@@ -344,6 +345,27 @@ function applyPermissions() {
   saElements.forEach(el => {
     el.style.display = (role === 'superadmin') ? 'inline-block' : 'none';
   });
+  const optionAccess = {
+    tipeTrans: { KELUAR: 'outbound_input', TRANSFER: 'transfer_send' },
+    cekTrfTipe: { KELUAR: 'outbound_input', TRANSFER: 'transfer_send', MASUK: 'transfer_receive' },
+    cekScanActionType: { KELUAR: 'outbound_input', TRANSFER: 'transfer_send', MASUK: 'transfer_receive' }
+  };
+  Object.entries(optionAccess).forEach(([selectId, access]) => {
+    const select = document.getElementById(selectId);
+    if (!select) return;
+    Array.from(select.options).forEach(option => {
+      const feature = access[option.value];
+      option.disabled = !!feature && !hasFeatureAccess(feature);
+    });
+    const selected = Array.from(select.options).find(option => option.value === select.value);
+    if (selected?.disabled) {
+      const allowedOption = Array.from(select.options).find(option => !option.disabled);
+      if (allowedOption) {
+        select.value = allowedOption.value;
+        select.dispatchEvent(new Event('change'));
+      }
+    }
+  });
 
   // Kartu Master Akun (Manajemen Akun) hanya tampil untuk Superadmin
   const userMgmtCard = document.getElementById('tabelUsers')?.closest('.card');
@@ -531,9 +553,16 @@ let appState = buildDefaultAppState();
 // Normalisasi data setelah dimuat dari server / hasil impor
 function normalizeAppState() {
   appState.warehouses = sanitizeWarehouses(appState.warehouses);
+  ensureWarehouseBarcodes();
   ensureSubLocationBarcodes();
   appState.bundleMapping = sanitizeBundleMapping(appState.bundleMapping);
-  appState.skuBarcodeRules = Array.isArray(appState.skuBarcodeRules) ? appState.skuBarcodeRules : [];
+  appState.skuBarcodeRules = Array.isArray(appState.skuBarcodeRules)
+    ? appState.skuBarcodeRules.map(rule => {
+      const normalizedRule = { ...rule };
+      delete normalizedRule.custom_ranges;
+      return normalizedRule;
+    })
+    : [];
   appState.uomList = sanitizeUomList(appState.uomList);
   appState.masterBarang.forEach(b => { if (!b.uom) b.uom = 'PCS'; });
   migrateOpnameKeys();
@@ -642,6 +671,7 @@ let pageTujuanKeluar = 1;
 let pageTujuanMasuk = 1;
 let pageKategori = 1;
 let pageBarang = 1;
+let pageMasterBarcode = 1;
 let pageBundle = 1;
 let pageRekon = 1;
 let pageUsers = 1;
@@ -706,11 +736,11 @@ function renderAllowBackdateUI() {
   const btn = document.getElementById("btnToggleAllowBackdate");
   if (!btn) return;
   if (appState.allowBackdate) {
-    btn.textContent = "Status Custom Backdate: AKTIF (Diizinkan)";
-    btn.className = "btn-danger";
+    btn.textContent = "AKTIF · Backdate diizinkan";
+    btn.className = "btn-danger system-toggle-button";
   } else {
-    btn.textContent = "Status Custom Backdate: NON-AKTIF (Di-Blok)";
-    btn.className = "btn-primary";
+    btn.textContent = "NON-AKTIF · Backdate diblokir";
+    btn.className = "btn-primary system-toggle-button";
   }
 }
 
@@ -929,6 +959,47 @@ function generateKodeProduksi(namaBarang, dateStr = null) {
   const yy = String(d.getFullYear()).slice(-2);
 
   return `${prefix}-${mm}${dd}${yy}`;
+}
+
+function formatSkuProductionBarcode(rule, quantity, date, batch = '', shift = '') {
+  const qtyLength = Number(rule.quantity_length);
+  const dateStart = Number(rule.date_start);
+  const dateLength = Number(rule.date_length);
+  const skuStart = Number(rule.sku_start);
+  const skuLength = Number(rule.sku_length);
+  const batchStart = Number(rule.batch_start) || 0;
+  const shiftStart = Number(rule.shift_start) || 0;
+  const starts = [skuStart, Number(rule.quantity_start), dateStart, batchStart, shiftStart].filter(Boolean);
+  if (!Number.isInteger(quantity) || quantity <= 0) return { error: 'Qty barcode manufaktur harus berupa bilangan bulat lebih dari 0.' };
+  if (!Number.isInteger(qtyLength) || qtyLength < 1 || String(quantity).length > qtyLength) {
+    return { error: `Qty hasil melebihi panjang ${qtyLength} digit pada Master Prefix SKU.` };
+  }
+  if (dateLength !== 6 || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return { error: 'Tanggal barcode manufaktur tidak valid.' };
+  }
+  if (batchStart && !/^\d$/.test(String(batch || ''))) return { error: 'Isi batch manufaktur dengan tepat 1 digit angka.' };
+  if (shiftStart && !/^[PM]$/.test(String(shift || '').toUpperCase())) return { error: 'Pilih shift P atau M untuk barcode manufaktur.' };
+  if (starts.some(start => !Number.isInteger(start) || start < 1) ||
+      String(rule.prefix || '').length !== skuLength) {
+    return { error: 'Posisi atau prefix Master Prefix SKU tidak valid.' };
+  }
+  const dateValue = date.slice(2, 4) + date.slice(5, 7) + date.slice(8, 10);
+  const segments = [
+    { start: skuStart, value: String(rule.prefix || '').toUpperCase() },
+    { start: Number(rule.quantity_start), value: String(quantity).padStart(qtyLength, '0') },
+    { start: dateStart, value: dateValue },
+    ...(batchStart ? [{ start: batchStart, value: String(batch) }] : []),
+    ...(shiftStart ? [{ start: shiftStart, value: String(shift).toUpperCase() }] : [])
+  ];
+  const maxLength = Math.max(...segments.map(segment => segment.start + segment.value.length - 1));
+  const chars = Array(maxLength).fill('0');
+  for (const segment of segments) {
+    if (!Number.isInteger(segment.start) || segment.start < 1) return { error: 'Posisi Master Prefix SKU tidak valid.' };
+    for (let index = 0; index < segment.value.length; index++) {
+      chars[segment.start - 1 + index] = segment.value[index];
+    }
+  }
+  return { barcode: chars.join('') };
 }
 
 // TAB NAVIGATION
@@ -1194,6 +1265,11 @@ function renderUsersTabel(page = 1) {
         <td><code>${cekEsc(u.username)}</code></td>
         <td><span class="badge ${u.role === 'superadmin' ? 'badge-primary' : (u.role === 'admin' ? 'badge-info' : 'badge-secondary')}">${u.role.toUpperCase()}</span></td>
         <td class="text-center">${crudBadge}</td>
+        <td class="text-center">
+          <button type="button" class="${u.crud?.allow_multiple_sessions ? 'btn-success' : 'btn-secondary'}"
+            title="Klik untuk ${u.crud?.allow_multiple_sessions ? 'menonaktifkan' : 'mengaktifkan'} akses bersamaan"
+            onclick="toggleUserMultipleSessions('${u.username}')">${u.crud?.allow_multiple_sessions ? 'Aktif' : 'Nonaktif'}</button>
+        </td>
         <td style="font-size:12px;">
           <div><b>Menu:</b> ${menuCount} Menu Terbuka</div>
           <div><b>Gudang:</b> ${whText}</div>
@@ -1220,6 +1296,14 @@ function changeUsersPage(delta) {
   renderUsersTabel(pageUsers + delta);
 }
 
+async function toggleUserMultipleSessions(username) {
+  if (!requireSuperadminAccount()) return;
+  const user = appState.users.find(item => item.username === username);
+  if (!user) return;
+  user.crud = { ...user.crud, allow_multiple_sessions: !user.crud?.allow_multiple_sessions };
+  await saveUsersToServer();
+}
+
 function openModalEditUser(username) {
   if (!requireSuperadminAccount()) return;
   const user = appState.users.find(u => u.username === username);
@@ -1236,7 +1320,9 @@ function openModalEditUser(username) {
   document.getElementById("editChkUpdate").checked = !!user.crud?.update;
   document.getElementById("editChkDelete").checked = !!user.crud?.delete;
   document.querySelectorAll("#editUserFeatureAccessBox .edit-user-feature-access").forEach(checkbox => {
-    checkbox.checked = user.crud?.[checkbox.value] !== false;
+    checkbox.checked = checkbox.value === 'custom_barcode'
+      ? user.crud?.custom_barcode === true
+      : user.crud?.[checkbox.value] !== false;
   });
 
   const userMenus = user.allowed_menus || ['dashboardView', 'inputView', 'pdaView', 'rekonView', 'rekonReturView', 'cekStokView', 'transferApprovalView', 'laporanStokView'];
@@ -1311,8 +1397,9 @@ function hapusUser(username) {
 function tambahGudangViaMaster(e) {
   e.preventDefault();
   const nama = document.getElementById("mgNamaGudang").value.trim();
-  const ean = document.getElementById("mgEanGudang").value.trim() || "-";
+  const ean = prepareWarehouseEan(document.getElementById("mgEanGudang").value, -1);
   if (!nama) return;
+  if (!ean) return;
 
   if (appState.warehouses.some(w => w.nama.toLowerCase() === nama.toLowerCase())) {
     return alert("Nama lokasi gudang sudah terdaftar!");
@@ -1397,6 +1484,76 @@ function ean13CheckDigit(firstTwelveDigits) {
 function isValidEan13(value) {
   const code = String(value || '');
   return /^\d{13}$/.test(code) && ean13CheckDigit(code.slice(0, 12)) === code[12];
+}
+
+function getUsedEanCodes(excludedWarehouseIndex = -1) {
+  const used = new Set();
+  appState.masterBarang.forEach(product => {
+    const ean = normalizeEan13(product.barcode);
+    if (ean) used.add(ean);
+  });
+  appState.warehouses.forEach((warehouse, index) => {
+    const warehouseEan = normalizeEan13(warehouse.ean);
+    if (index !== excludedWarehouseIndex && warehouseEan) used.add(warehouseEan);
+    Object.values(warehouse.subLokasiEan || {}).forEach(value => {
+      const ean = normalizeEan13(value);
+      if (ean) used.add(ean);
+    });
+  });
+  return used;
+}
+
+function generateWarehouseEan(usedCodes = getUsedEanCodes()) {
+  const prefix = '899388360';
+  for (let sequence = 0; sequence <= 999; sequence++) {
+    const body = `${prefix}${String(sequence).padStart(3, '0')}`;
+    const ean = `${body}${ean13CheckDigit(body)}`;
+    if (!usedCodes.has(ean)) return ean;
+  }
+  alert('Nomor EAN gudang sudah habis. Hubungi administrator untuk menentukan prefix barcode lain.');
+  return '';
+}
+
+function prepareWarehouseEan(rawValue, excludedWarehouseIndex = -1) {
+  const digits = String(rawValue || '').trim().replace(/\s/g, '');
+  const usedCodes = getUsedEanCodes(excludedWarehouseIndex);
+  if (!digits) return generateWarehouseEan(usedCodes);
+  const normalized = normalizeEan13(digits);
+  if (!normalized) {
+    alert('EAN gudang harus berupa 12 digit (check digit dibuat otomatis) atau 13 digit EAN-13 yang valid.');
+    return '';
+  }
+  if (usedCodes.has(normalized)) {
+    alert('EAN tersebut sudah digunakan oleh barang, gudang, atau sub lokasi lain.');
+    return '';
+  }
+  return normalized;
+}
+
+function ensureWarehouseBarcodes() {
+  const used = new Set();
+  appState.masterBarang.forEach(product => {
+    const ean = normalizeEan13(product.barcode);
+    if (ean) used.add(ean);
+  });
+  appState.warehouses.forEach(warehouse => {
+    Object.values(warehouse.subLokasiEan || {}).forEach(value => {
+      const ean = normalizeEan13(value);
+      if (ean) used.add(ean);
+    });
+  });
+  appState.warehouses.forEach(warehouse => {
+    const digits = String(warehouse.ean || '').trim().replace(/\s/g, '');
+    const repaired = /^\d{13}$/.test(digits)
+      ? `${digits.slice(0, 12)}${ean13CheckDigit(digits.slice(0, 12))}`
+      : normalizeEan13(digits);
+    let ean = repaired && !used.has(repaired) ? repaired : '';
+    if (!ean) ean = generateWarehouseEan(used);
+    if (ean) {
+      warehouse.ean = ean;
+      used.add(ean);
+    }
+  });
 }
 
 function generateSubLocationEan(warehouse) {
@@ -1630,7 +1787,8 @@ function simpanEditMasterGudang(e) {
   e.preventDefault();
   const index = parseInt(document.getElementById("editGudangIndex").value);
   const namaBaru = document.getElementById("editGudangNama").value.trim();
-  const eanBaru = document.getElementById("editGudangEan").value.trim() || "-";
+  const eanBaru = prepareWarehouseEan(document.getElementById("editGudangEan").value, index);
+  if (!eanBaru) return;
 
   if (namaBaru && index >= 0 && index < appState.warehouses.length) {
     const isDuplicate = appState.warehouses.some((w, idx) => idx !== index && w.nama.toLowerCase() === namaBaru.toLowerCase());
@@ -2221,6 +2379,8 @@ function closeModalSetSku() {
   document.getElementById('modalSetSku').style.display = 'none';
 }
 
+let pageSkuBarcodeRules = 1;
+
 function openModalSkuBarcodeRules() {
   if (!currentUser || currentUser.role !== 'superadmin') return alert('Akses ditolak. Master Prefix SKU hanya untuk Superadmin.');
   const productSelect = document.getElementById('skuBarcodeProduct');
@@ -2228,6 +2388,8 @@ function openModalSkuBarcodeRules() {
     sortDisplayItems(appState.masterBarang, product => product.sku).map(product =>
       `<option value="${cekEsc(product.sku)}">${cekEsc(product.sku)} - ${cekEsc(product.nama)}</option>`
     ).join('');
+  pageSkuBarcodeRules = 1;
+  document.getElementById('searchSkuBarcodeRules').value = '';
   renderSkuBarcodeRules();
   resetSkuBarcodeRuleForm();
   document.getElementById('modalSkuBarcodeRules').style.display = 'flex';
@@ -2247,7 +2409,22 @@ function resetSkuBarcodeRuleForm() {
   document.getElementById('skuBarcodeQtyLength').value = '2';
   document.getElementById('skuBarcodeDateStart').value = '8';
   document.getElementById('skuBarcodeDateLength').value = '6';
+  document.getElementById('skuBarcodeBatchStart').value = '';
+  document.getElementById('skuBarcodeShiftStart').value = '';
   document.getElementById('btnSaveSkuBarcodeRule').textContent = '+ Tambah Aturan';
+  updateSkuBarcodeRulePreview();
+}
+
+function handleSkuBarcodeProductChange() {
+  const sku = document.getElementById('skuBarcodeProduct').value;
+  const prefix = sku.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+  const skuStart = Number(document.getElementById('skuBarcodeSkuStart').value) || 1;
+  const quantityLength = Number(document.getElementById('skuBarcodeQtyLength').value) || 2;
+  const quantityStart = skuStart + prefix.length;
+  document.getElementById('skuBarcodePrefix').value = prefix;
+  document.getElementById('skuBarcodeSkuLength').value = String(prefix.length || '');
+  document.getElementById('skuBarcodeQtyStart').value = String(quantityStart);
+  document.getElementById('skuBarcodeDateStart').value = String(quantityStart + quantityLength);
   updateSkuBarcodeRulePreview();
 }
 
@@ -2260,15 +2437,22 @@ function updateSkuBarcodeRulePreview() {
   const qtyLength = Number(document.getElementById('skuBarcodeQtyLength')?.value) || 2;
   const dateStart = Number(document.getElementById('skuBarcodeDateStart')?.value) || 8;
   const dateLength = Number(document.getElementById('skuBarcodeDateLength')?.value) || 6;
+  const batchStart = Number(document.getElementById('skuBarcodeBatchStart')?.value) || 0;
+  const shiftStart = Number(document.getElementById('skuBarcodeShiftStart')?.value) || 0;
   const preview = document.getElementById('skuBarcodeRulePreview');
   if (!preview) return;
   const qtyExample = '24'.padStart(qtyLength, '0');
   const dateExample = '261015'.padStart(dateLength, '0');
-  const sampleLength = Math.max(skuStart + skuLength - 1, qtyStart + qtyLength - 1, dateStart + dateLength - 1);
+  const sampleLength = Math.max(
+    skuStart + skuLength - 1, qtyStart + qtyLength - 1, dateStart + dateLength - 1,
+    batchStart, shiftStart
+  );
   const sample = Array(sampleLength).fill('_');
   Array.from(prefix).forEach((character, index) => { sample[skuStart - 1 + index] = character; });
   Array.from(qtyExample).forEach((character, index) => { sample[qtyStart - 1 + index] = character; });
   Array.from(dateExample).forEach((character, index) => { sample[dateStart - 1 + index] = character; });
+  if (batchStart) sample[batchStart - 1] = '1';
+  if (shiftStart) sample[shiftStart - 1] = 'P';
   preview.textContent = `Contoh scan: ${sample.join('')} → ${sku}, Qty ${qtyExample}, tanggal produksi 20YY-MM-DD.`;
 }
 
@@ -2278,11 +2462,23 @@ function skuBarcodeRangeLabel(start, length) {
   return first > 0 && size > 0 ? `${first}-${first + size - 1}` : '-';
 }
 
-function renderSkuBarcodeRules() {
+function renderSkuBarcodeRules(page = pageSkuBarcodeRules) {
   const tbody = document.getElementById('tabelSkuBarcodeRules');
   if (!tbody) return;
   const rules = Array.isArray(appState.skuBarcodeRules) ? appState.skuBarcodeRules : [];
-  tbody.innerHTML = rules.length ? rules.map((rule, index) => {
+  const query = document.getElementById('searchSkuBarcodeRules')?.value.trim().toLowerCase() || '';
+  const filtered = rules.map((rule, index) => ({ rule, index })).filter(({ rule }) => {
+    const product = findMasterBarang(rule.sku);
+    return [rule.prefix, rule.sku, product?.nama, rule.batch_start, rule.shift_start]
+      .some(value => String(value || '').toLowerCase().includes(query));
+  });
+  const pageSize = Number(document.getElementById('pageSizeSkuBarcodeRules')?.value) || 10;
+  const totalItems = filtered.length;
+  const totalPages = Math.ceil(totalItems / pageSize) || 1;
+  pageSkuBarcodeRules = Math.min(Math.max(page, 1), totalPages);
+  const startIndex = (pageSkuBarcodeRules - 1) * pageSize;
+  const endIndex = Math.min(startIndex + pageSize, totalItems);
+  tbody.innerHTML = totalItems ? filtered.slice(startIndex, endIndex).map(({ rule, index }) => {
     const product = findMasterBarang(rule.sku);
     return `<tr>
       <td><code>${cekEsc(rule.prefix || '')}</code></td>
@@ -2290,12 +2486,24 @@ function renderSkuBarcodeRules() {
       <td>${skuBarcodeRangeLabel(rule.sku_start, rule.sku_length)}</td>
       <td>${skuBarcodeRangeLabel(rule.quantity_start, rule.quantity_length)}</td>
       <td>${skuBarcodeRangeLabel(rule.date_start, rule.date_length)}</td>
+      <td>${rule.batch_start ? `${rule.batch_start} (1 digit)` : '-'}</td>
+      <td>${rule.shift_start ? `${rule.shift_start} (P/M)` : '-'}</td>
       <td class="text-center"><div class="action-btn-group">
         <button type="button" class="btn-warning" onclick="editSkuBarcodeRule(${index})">Edit</button>
         <button type="button" class="btn-danger" onclick="hapusSkuBarcodeRule(${index})">Hapus</button>
       </div></td>
     </tr>`;
-  }).join('') : '<tr><td colspan="6" class="cek-empty">Belum ada aturan prefix SKU.</td></tr>';
+  }).join('') : `<tr><td colspan="8" class="cek-empty">${query ? 'Tidak ada aturan yang cocok dengan pencarian.' : 'Belum ada aturan prefix SKU.'}</td></tr>`;
+  updatePaginationControls(
+    pageSkuBarcodeRules, totalPages,
+    document.getElementById('btnPrevSkuBarcodeRules'), document.getElementById('btnNextSkuBarcodeRules'),
+    document.getElementById('indicatorSkuBarcodeRules'), document.getElementById('infoSkuBarcodeRules'),
+    startIndex, endIndex, totalItems
+  );
+}
+
+function changeSkuBarcodeRulesPage(delta) {
+  renderSkuBarcodeRules(pageSkuBarcodeRules + delta);
 }
 
 function editSkuBarcodeRule(index) {
@@ -2310,6 +2518,8 @@ function editSkuBarcodeRule(index) {
   document.getElementById('skuBarcodeQtyLength').value = String(rule.quantity_length || 2);
   document.getElementById('skuBarcodeDateStart').value = String(rule.date_start || 8);
   document.getElementById('skuBarcodeDateLength').value = String(rule.date_length || 6);
+  document.getElementById('skuBarcodeBatchStart').value = rule.batch_start || '';
+  document.getElementById('skuBarcodeShiftStart').value = rule.shift_start || '';
   document.getElementById('btnSaveSkuBarcodeRule').textContent = 'Simpan Perubahan';
   updateSkuBarcodeRulePreview();
 }
@@ -2317,32 +2527,67 @@ function editSkuBarcodeRule(index) {
 function simpanSkuBarcodeRule(event) {
   event.preventDefault();
   if (!currentUser || currentUser.role !== 'superadmin') return alert('Akses ditolak. Master Prefix SKU hanya untuk Superadmin.');
+  const selectedSku = document.getElementById('skuBarcodeProduct').value;
+  const selectedPrefix = selectedSku.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+  if (!selectedSku || !selectedPrefix) return alert('Pilih alias SKU yang memiliki karakter huruf atau angka.');
+  document.getElementById('skuBarcodePrefix').value = selectedPrefix;
+  document.getElementById('skuBarcodeSkuLength').value = String(selectedPrefix.length);
   const rule = {
-    prefix: document.getElementById('skuBarcodePrefix').value.trim().toUpperCase(),
-    sku: document.getElementById('skuBarcodeProduct').value,
+    prefix: selectedPrefix,
+    sku: selectedSku,
     sku_start: Number(document.getElementById('skuBarcodeSkuStart').value),
     sku_length: Number(document.getElementById('skuBarcodeSkuLength').value),
     quantity_start: Number(document.getElementById('skuBarcodeQtyStart').value),
     quantity_length: Number(document.getElementById('skuBarcodeQtyLength').value),
     date_start: Number(document.getElementById('skuBarcodeDateStart').value),
-    date_length: Number(document.getElementById('skuBarcodeDateLength').value)
+    date_length: Number(document.getElementById('skuBarcodeDateLength').value),
+    batch_start: document.getElementById('skuBarcodeBatchStart').value === ''
+      ? null : Number(document.getElementById('skuBarcodeBatchStart').value),
+    shift_start: document.getElementById('skuBarcodeShiftStart').value === ''
+      ? null : Number(document.getElementById('skuBarcodeShiftStart').value)
   };
   const editIndex = document.getElementById('skuBarcodeRuleEditIndex').value;
   const ranges = [
-    { start: rule.sku_start, length: rule.sku_length },
-    { start: rule.quantity_start, length: rule.quantity_length },
-    { start: rule.date_start, length: rule.date_length }
+    { name: 'SKU', start: rule.sku_start, length: rule.sku_length },
+    { name: 'Qty', start: rule.quantity_start, length: rule.quantity_length },
+    { name: 'Tanggal', start: rule.date_start, length: rule.date_length },
+    ...(rule.batch_start ? [{ name: 'Batch', start: rule.batch_start, length: 1 }] : []),
+    ...(rule.shift_start ? [{ name: 'Shift', start: rule.shift_start, length: 1 }] : [])
   ];
   const rangesValid = ranges.every(range => Number.isInteger(range.start) && range.start > 0 &&
     Number.isInteger(range.length) && range.length > 0);
-  const rangesOverlap = ranges.some((range, index) => ranges.slice(index + 1).some(other =>
-    range.start < other.start + other.length && other.start < range.start + range.length
-  ));
+  const overlappingRanges = [];
+  ranges.forEach((range, index) => ranges.slice(index + 1).forEach(other => {
+    if (range.start < other.start + other.length && other.start < range.start + range.length) {
+      overlappingRanges.push(`${range.name} (${range.start}-${range.start + range.length - 1}) dengan ${other.name} (${other.start}-${other.start + other.length - 1})`);
+    }
+  }));
   if (!rule.prefix || !findMasterBarang(rule.sku) || !rangesValid ||
       rule.prefix.length !== rule.sku_length || rule.date_length !== 6) {
     return alert('Isi prefix, pilih SKU master, samakan panjang range SKU dengan jumlah karakter prefix, dan gunakan tanggal 6 digit YYMMDD.');
   }
-  if (rangesOverlap) return alert('Range SKU, jumlah, dan tanggal tidak boleh saling tumpang tindih.');
+  if ((rule.batch_start !== null && (!Number.isInteger(rule.batch_start) || rule.batch_start < 1)) ||
+      (rule.shift_start !== null && (!Number.isInteger(rule.shift_start) || rule.shift_start < 1))) {
+    return alert('Posisi awal batch dan shift harus berupa angka positif atau dikosongkan.');
+  }
+  if (overlappingRanges.length) {
+    const lastBasePosition = Math.max(
+      rule.sku_start + rule.sku_length - 1,
+      rule.quantity_start + rule.quantity_length - 1,
+      rule.date_start + rule.date_length - 1
+    );
+    const batchSuggestion = rule.batch_start
+      ? Math.max(lastBasePosition + 1, rule.batch_start)
+      : null;
+    const shiftSuggestion = rule.shift_start
+      ? Math.max(lastBasePosition + 1, batchSuggestion ? batchSuggestion + 1 : rule.shift_start)
+      : null;
+    const suggestions = [
+      rule.batch_start ? `Batch mulai posisi ${batchSuggestion}` : '',
+      rule.shift_start ? `Shift mulai posisi ${shiftSuggestion}` : ''
+    ].filter(Boolean).join(' dan ');
+    return alert(`Posisi saling bertumpuk: ${overlappingRanges.join('; ')}. ${suggestions ? `${suggestions}.` : 'Atur setiap range pada posisi yang berbeda.'}`);
+  }
   const editingIndex = editIndex === '' ? -1 : Number(editIndex);
   if (appState.skuBarcodeRules.some((existing, index) =>
     index !== editingIndex && String(existing.prefix || '').toUpperCase() === rule.prefix
@@ -2351,9 +2596,9 @@ function simpanSkuBarcodeRule(event) {
   if (editIndex === '') appState.skuBarcodeRules.push(rule);
   else appState.skuBarcodeRules[Number(editIndex)] = rule;
   saveData();
-  renderSkuBarcodeRules();
+  renderSkuBarcodeRules(editIndex === '' ? 1 : pageSkuBarcodeRules);
   resetSkuBarcodeRuleForm();
-  alert(editIndex === '' ? 'Aturan Master Prefix SKU berhasil ditambahkan.' : 'Aturan Master Prefix SKU berhasil diperbarui.');
+  alert(`${editIndex === '' ? 'Aturan Master Prefix SKU berhasil ditambahkan.' : 'Aturan Master Prefix SKU berhasil diperbarui.'}`);
 }
 
 function hapusSkuBarcodeRule(index) {
@@ -2365,6 +2610,153 @@ function hapusSkuBarcodeRule(index) {
     renderSkuBarcodeRules();
     resetSkuBarcodeRuleForm();
   });
+}
+
+function openModalCustomBarcode() {
+  if (!requireFeatureAccess('custom_barcode', 'Cetak Barcode Custom')) return;
+  const productSelect = document.getElementById('customBarcodeProduct');
+  productSelect.innerHTML = '<option value="">-- Tidak pilih SKU (tujuan custom) --</option>' +
+    sortDisplayItems(appState.masterBarang, product => product.sku).map(product =>
+      `<option value="${cekEsc(product.sku)}">${cekEsc(product.sku)} - ${cekEsc(product.nama)}</option>`
+    ).join('');
+  document.getElementById('customBarcodeLabel').value = '';
+  renderCustomBarcodeRanges([{ start: 1, length: 0, value: '' }]);
+  productSelect.value = '';
+  document.getElementById('modalCustomBarcode').style.display = 'flex';
+  updateCustomBarcodePreview();
+}
+
+function closeModalCustomBarcode() {
+  document.getElementById('modalCustomBarcode').style.display = 'none';
+  document.getElementById('customBarcodeProduct').value = '';
+  document.getElementById('customBarcodeLabel').value = '';
+  document.getElementById('customBarcodeRanges').innerHTML = '';
+  document.getElementById('customBarcodePreview').textContent = '';
+}
+
+function getCustomBarcodeRanges() {
+  return Array.from(document.querySelectorAll('#customBarcodeRanges .sku-barcode-custom-row')).map(row => {
+    const fields = row.querySelectorAll('input');
+    return { start: Number(fields[0].value), length: Number(fields[1].value), value: fields[2].value.trim().toUpperCase() };
+  });
+}
+
+function renderCustomBarcodeRanges(ranges) {
+  const container = document.getElementById('customBarcodeRanges');
+  container.innerHTML = ranges.map((range, index) => `
+    <div class="sku-barcode-custom-row">
+      <div class="sku-barcode-range-inputs">
+        <label>Range ${index + 1} (posisi / panjang)</label>
+        <div class="form-row">
+          <input type="number" min="1" value="${cekEsc(range.start)}" aria-label="Posisi range ${index + 1}" oninput="handleCustomBarcodeRangeChange(${index})">
+          <input type="number" min="1" value="${range.length || ''}" aria-label="Panjang range ${index + 1}" oninput="handleCustomBarcodeRangeChange(${index})">
+        </div>
+      </div>
+      <div class="sku-barcode-range-value">
+        <label>Nilai barcode</label>
+        <div class="sku-barcode-range-value-control">
+          <input type="text" value="${cekEsc(range.value)}" aria-label="Nilai range ${index + 1}" oninput="handleCustomBarcodeRangeChange(${index})">
+          ${index ? `<button type="button" class="btn-danger" onclick="removeCustomBarcodeRange(${index})">Hapus</button>` : ''}
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+function handleCustomBarcodeRangeChange(index) {
+  const ranges = getCustomBarcodeRanges();
+  const rows = document.querySelectorAll('#customBarcodeRanges .sku-barcode-custom-row');
+  for (let nextIndex = index + 1; nextIndex < ranges.length; nextIndex++) {
+    ranges[nextIndex].start = ranges[nextIndex - 1].start + ranges[nextIndex - 1].length;
+    rows[nextIndex].querySelectorAll('input')[0].value = String(ranges[nextIndex].start);
+  }
+  updateCustomBarcodePreview();
+}
+
+function handleCustomBarcodeProductChange() {
+  const productSelect = document.getElementById('customBarcodeProduct');
+  const product = findMasterBarang(productSelect.value);
+  const ranges = getCustomBarcodeRanges();
+  if (product && ranges.length) {
+    const prefix = product.sku.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+    ranges[0] = { start: 1, length: prefix.length, value: prefix };
+    for (let index = 1; index < ranges.length; index++) {
+      ranges[index].start = ranges[index - 1].start + ranges[index - 1].length;
+    }
+    if (!document.getElementById('customBarcodeLabel').value) {
+      document.getElementById('customBarcodeLabel').value = product.nama;
+    }
+    renderCustomBarcodeRanges(ranges);
+  } else {
+    handleCustomBarcodeLabelChange();
+  }
+  updateCustomBarcodePreview();
+}
+
+function handleCustomBarcodeLabelChange() {
+  if (document.getElementById('customBarcodeProduct').value) {
+    updateCustomBarcodePreview();
+    return;
+  }
+  const ranges = getCustomBarcodeRanges();
+  if (!ranges.length) return;
+  const value = document.getElementById('customBarcodeLabel').value.trim().toUpperCase();
+  ranges[0] = { start: 1, length: value.length, value };
+  for (let index = 1; index < ranges.length; index++) {
+    ranges[index].start = ranges[index - 1].start + ranges[index - 1].length;
+  }
+  renderCustomBarcodeRanges(ranges);
+  updateCustomBarcodePreview();
+}
+
+function addCustomBarcodeRange() {
+  const ranges = getCustomBarcodeRanges();
+  const last = ranges[ranges.length - 1] || { start: 1, length: 0 };
+  ranges.push({ start: last.start + last.length, length: 6, value: '' });
+  renderCustomBarcodeRanges(ranges);
+  updateCustomBarcodePreview();
+}
+
+function removeCustomBarcodeRange(index) {
+  const ranges = getCustomBarcodeRanges();
+  if (index <= 0 || index >= ranges.length) return;
+  ranges.splice(index, 1);
+  for (let nextIndex = index; nextIndex < ranges.length; nextIndex++) {
+    ranges[nextIndex].start = ranges[nextIndex - 1].start + ranges[nextIndex - 1].length;
+  }
+  renderCustomBarcodeRanges(ranges);
+  updateCustomBarcodePreview();
+}
+
+function updateCustomBarcodePreview() {
+  const preview = document.getElementById('customBarcodePreview');
+  if (!preview) return;
+  const barcode = getCustomBarcodeRanges().slice().sort((a, b) => a.start - b.start).map(range => range.value).join('');
+  preview.innerHTML = `Preview: <code>${cekEsc(barcode || '—')}</code>`;
+}
+
+function printCustomBarcodePdf() {
+  if (!requireFeatureAccess('custom_barcode', 'Cetak Barcode Custom')) return;
+  const selectedSku = document.getElementById('customBarcodeProduct').value;
+  const product = findMasterBarang(selectedSku);
+  const label = document.getElementById('customBarcodeLabel').value.trim() || product?.nama || '';
+  const ranges = getCustomBarcodeRanges().sort((a, b) => a.start - b.start);
+  const barcode = ranges.map(range => range.value).join('');
+  const rangesValid = ranges.length > 0 && ranges.every((range, index) =>
+    Number.isInteger(range.start) && range.start > 0 &&
+    Number.isInteger(range.length) && range.length > 0 &&
+    range.value.length === range.length &&
+    (index === 0 ? range.start === 1 : range.start === ranges[index - 1].start + ranges[index - 1].length)
+  );
+  if ((selectedSku && !product) || (!product && !label) || !rangesValid || !generateCode39Svg(barcode)) {
+    return alert('Isi nama label/tujuan jika tanpa SKU dan pastikan setiap nilai barcode sesuai panjang range. Code 39 hanya mendukung huruf A-Z, angka, spasi, titik, dan karakter -.$/+%.');
+  }
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) return alert('Pop-up diblokir browser. Izinkan pop-up untuk mencetak barcode custom.');
+  printWindow.document.write(`<!doctype html><html lang="id"><head><meta charset="utf-8"><title>Barcode Tujuan Keluar</title>
+    <style>*{box-sizing:border-box}body{font:12px Arial,sans-serif;color:#111827;margin:12mm}.barcode-label{min-height:110px;border:1px solid #cbd5e1;padding:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;break-inside:avoid}.barcode-label strong{font-size:14px}.barcode-label small{margin:4px 0;color:#475569}.barcode-label span{font-size:12px;letter-spacing:1px}.custom-code39-barcode{max-width:100%;height:42px}@media print{body{margin:8mm}}</style>
+    </head><body><article class="barcode-label"><strong>${cekEsc(label)}</strong><small>Barcode Custom${product ? ` · ${cekEsc(product.sku)}` : ' · Tujuan Keluar'}</small>${generateCode39Svg(barcode)}<span>${cekEsc(barcode)}</span></article>
+    <script>window.addEventListener('load',function(){setTimeout(function(){window.print()},150)})<\/script></body></html>`);
+  printWindow.document.close();
 }
 
 function updateSetSkuOptions() {
@@ -2496,10 +2888,194 @@ function renderMasterBarangTabel(page = 1) {
   const btnNext = document.getElementById("btnNextBarang");
 
   updatePaginationControls(pageBarang, totalPages, btnPrev, btnNext, indicatorEl, infoEl, startIndex, endIndex, totalItems);
+  renderMasterBarcodeTabel(pageMasterBarcode);
 }
 
 function changeMasterBarangPage(delta) {
   renderMasterBarangTabel(pageBarang + delta);
+}
+
+const EAN13_L_CODES = ['0001101', '0011001', '0010011', '0111101', '0100011', '0110001', '0101111', '0111011', '0110111', '0001011'];
+const EAN13_G_CODES = ['0100111', '0110011', '0011011', '0100001', '0011101', '0111001', '0000101', '0010001', '0001001', '0010111'];
+const EAN13_FIRST_DIGIT_PARITY = ['LLLLLL', 'LLGLGG', 'LLGGLG', 'LLGGGL', 'LGLLGG', 'LGGLLG', 'LGGGLL', 'LGLGLG', 'LGLGGL', 'LGGLGL'];
+
+function ean13CheckDigit(twelveDigits) {
+  const sum = Array.from(twelveDigits, (digit, index) =>
+    Number(digit) * (index % 2 === 0 ? 1 : 3)
+  ).reduce((total, digit) => total + digit, 0);
+  return String((10 - (sum % 10)) % 10);
+}
+
+function normalizeEan13(barcode) {
+  const digits = String(barcode || '').trim();
+  if (/^\d{12}$/.test(digits)) return digits + ean13CheckDigit(digits);
+  if (!/^\d{13}$/.test(digits) || digits[12] !== ean13CheckDigit(digits.slice(0, 12))) return '';
+  return digits;
+}
+
+function generateEan13Svg(barcode) {
+  const digits = normalizeEan13(barcode);
+  if (!digits) return '';
+  const parity = EAN13_FIRST_DIGIT_PARITY[Number(digits[0])];
+  let encoded = '101';
+  for (let index = 1; index <= 6; index++) {
+    const digit = Number(digits[index]);
+    encoded += parity[index - 1] === 'L' ? EAN13_L_CODES[digit] : EAN13_G_CODES[digit];
+  }
+  encoded += '01010';
+  for (let index = 7; index <= 12; index++) encoded += EAN13_L_CODES[Number(digits[index])].replace(/[01]/g, bit => bit === '0' ? '1' : '0');
+  encoded += '101';
+  const bars = Array.from(encoded).map((bit, index) =>
+    bit === '1' ? `<rect x="${10 + index * 2}" y="0" width="2" height="46"/>` : ''
+  ).join('');
+  const quietBars = bars.replace(/x="(\d+)"/g, (_, x) => `x="${Number(x) + 12}"`);
+  return `<svg class="ean13-barcode" xmlns="http://www.w3.org/2000/svg" width="234" height="46" viewBox="0 0 234 46" role="img" aria-label="Barcode EAN-13 ${digits}"><g fill="#111827">${quietBars}</g></svg>`;
+}
+
+function generateCode39Svg(value) {
+  const patterns = {
+    '0': 'nnnwwnwnn', '1': 'wnnwnnnnw', '2': 'nnwwnnnnw', '3': 'wnwwnnnnn',
+    '4': 'nnnwwnnnw', '5': 'wnnwwnnnn', '6': 'nnwwwnnnn', '7': 'nnnwnnwnw',
+    '8': 'wnnwnnwnn', '9': 'nnwwnnwnn', 'A': 'wnnnnwnnw', 'B': 'nnwnnwnnw',
+    'C': 'wnwnnwnnn', 'D': 'nnnnwwnnw', 'E': 'wnnnwwnnn', 'F': 'nnwnwwnnn',
+    'G': 'nnnnnwwnw', 'H': 'wnnnnwwnn', 'I': 'nnwnnwwnn', 'J': 'nnnnwwwnn',
+    'K': 'wnnnnnnww', 'L': 'nnwnnnnww', 'M': 'wnwnnnnwn', 'N': 'nnnnwnnww',
+    'O': 'wnnnwnnwn', 'P': 'nnwnwnnwn', 'Q': 'nnnnnnwww', 'R': 'wnnnnnwwn',
+    'S': 'nnwnnnwwn', 'T': 'nnnnwnwwn', 'U': 'wwnnnnnnw', 'V': 'nwwnnnnnw',
+    'W': 'wwwnnnnnn', 'X': 'nwnnwnnnw', 'Y': 'wwnnwnnnn', 'Z': 'nwwnwnnnn',
+    '-': 'nwnnnnwnw', '.': 'wwnnnnwnn', ' ': 'nwwnnnwnn', '$': 'nwnwnwnnn',
+    '/': 'nwnwnnnwn', '+': 'nwnnnwnwn', '%': 'nnnwnwnwn', '*': 'nwnnwnwnn'
+  };
+  const text = String(value || '').toUpperCase();
+  if (!text || text.includes('*') || Array.from(text).some(character => !patterns[character])) return '';
+  const encoded = `*${text}*`;
+  const narrow = 2;
+  const wide = 5;
+  const quiet = 12;
+  let x = quiet;
+  let bars = '';
+  Array.from(encoded).forEach((character, characterIndex) => {
+    const pattern = patterns[character];
+    Array.from(pattern).forEach((size, elementIndex) => {
+      const width = size === 'w' ? wide : narrow;
+      if (elementIndex % 2 === 0) bars += `<rect x="${x}" y="0" width="${width}" height="42"/>`;
+      x += width;
+    });
+    if (characterIndex < encoded.length - 1) x += narrow;
+  });
+  const width = x + quiet;
+  return `<svg class="custom-code39-barcode" xmlns="http://www.w3.org/2000/svg" width="${width}" height="42" viewBox="0 0 ${width} 42" role="img" aria-label="Barcode Code 39 ${cekEsc(text)}"><g fill="#111827">${bars}</g></svg>`;
+}
+
+function renderCekBarcode(value) {
+  const normalized = normalizeEan13(value);
+  if (!normalized) return value ? '<span class="modal-hint">EAN tidak valid</span>' : '-';
+  return `<div class="cek-barcode">${generateEan13Svg(normalized)}<small>${cekEsc(normalized)}</small></div>`;
+}
+
+function renderMasterBarcodeTabel(page = 1) {
+  pageMasterBarcode = page;
+  const tbody = document.getElementById('tabelMasterBarcode');
+  if (!tbody) return;
+  const pageSize = parseInt(document.getElementById('pageSizeMasterBarcode')?.value, 10) || 10;
+  const query = (document.getElementById('searchMasterBarcode')?.value || '').trim().toLowerCase();
+  const entries = getMasterBarcodeEntries().filter(entry =>
+    !query || `${entry.type} ${entry.code} ${entry.name} ${entry.ean}`.toLowerCase().includes(query)
+  );
+  const totalItems = entries.length;
+  const totalPages = Math.ceil(totalItems / pageSize) || 1;
+  pageMasterBarcode = Math.max(1, Math.min(pageMasterBarcode, totalPages));
+  const startIndex = (pageMasterBarcode - 1) * pageSize;
+  const endIndex = Math.min(startIndex + pageSize, totalItems);
+  const paginated = entries.slice(startIndex, endIndex);
+
+  tbody.innerHTML = paginated.length ? paginated.map((entry, index) => {
+    const normalized = normalizeEan13(entry.ean);
+    const svg = normalized ? generateEan13Svg(normalized) : '';
+    const barcodeLabel = normalized || entry.ean;
+    const barcodeContent = svg
+      ? `<div>${svg}<small>${normalized}</small></div>`
+      : `<span class="modal-hint">EAN tidak valid</span>`;
+    return `<tr>
+      <td class="text-center">${startIndex + index + 1}</td>
+      <td>${cekEsc(entry.type)}</td>
+      <td><code>${cekEsc(entry.code)}</code></td>
+      <td>${cekEsc(entry.name)}</td>
+      <td><code>${cekEsc(barcodeLabel)}</code></td>
+      <td>${barcodeContent}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="6" class="cek-empty">Tidak ada data barcode yang cocok.</td></tr>';
+
+  updatePaginationControls(
+    pageMasterBarcode,
+    totalPages,
+    document.getElementById('btnPrevMasterBarcode'),
+    document.getElementById('btnNextMasterBarcode'),
+    document.getElementById('indicatorMasterBarcodePage'),
+    document.getElementById('infoMasterBarcodePage'),
+    startIndex,
+    endIndex,
+    totalItems
+  );
+}
+
+function changeMasterBarcodePage(delta) {
+  renderMasterBarcodeTabel(pageMasterBarcode + delta);
+}
+
+function getMasterBarcodeEntries() {
+  const entries = [];
+  appState.masterBarang.forEach(product => {
+    const ean = String(product.barcode || '').trim();
+    if (ean && ean !== '-') entries.push({
+      type: 'Produk', code: String(product.sku || ''), name: String(product.nama || ''), ean
+    });
+  });
+  appState.warehouses.forEach(warehouse => {
+    const ean = String(warehouse.ean || '').trim();
+    if (ean && ean !== '-') entries.push({
+      type: 'Lokasi Gudang', code: String(warehouse.nama || ''), name: String(warehouse.nama || ''), ean
+    });
+    (warehouse.sublokasi || []).forEach(name => {
+      const subLocationEan = String(warehouse.subLokasiEan?.[name] || '').trim();
+      if (subLocationEan && subLocationEan !== '-') entries.push({
+        type: 'Sub Lokasi', code: `${warehouse.nama} / ${name}`, name: `${name} (${warehouse.nama})`, ean: subLocationEan
+      });
+    });
+  });
+  return entries.sort((a, b) =>
+    compareDisplayValues(`${a.type} ${a.code}`, `${b.type} ${b.code}`)
+  );
+}
+
+function printMasterBarcodePdf() {
+  if (!requireFeatureAccess('pdf', 'Cetak / PDF')) return;
+  const entries = getMasterBarcodeEntries().map(entry => ({
+    ...entry,
+    normalized: normalizeEan13(entry.ean)
+  })).filter(entry => entry.normalized);
+  if (!entries.length) return alert('Tidak ada barcode valid untuk dicetak.');
+  const labels = entries.map(entry => `
+    <article class="barcode-label">
+      <strong>${cekEsc(entry.name)}</strong>
+      <small>${cekEsc(entry.type)} · ${cekEsc(entry.code)}</small>
+      ${generateEan13Svg(entry.normalized)}
+      <span>${cekEsc(entry.normalized)}</span>
+    </article>`).join('');
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) return alert('Pop-up diblokir browser. Izinkan pop-up untuk mencetak Master Barcode.');
+  printWindow.document.write(`<!doctype html><html lang="id"><head><meta charset="utf-8"><title>Master Barcode</title>
+    <style>
+      *{box-sizing:border-box}body{font:11px Arial,sans-serif;color:#111827;margin:12mm}
+      h1{font-size:18px;margin:0 0 12px}.barcode-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+      .barcode-label{min-height:110px;border:1px solid #cbd5e1;border-radius:4px;padding:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;break-inside:avoid}
+      .barcode-label strong{font-size:12px}.barcode-label small{margin:3px 0;color:#475569}.barcode-label span{font-size:11px;letter-spacing:1px}
+      .ean13-barcode{max-width:100%;height:42px}
+      @media print{body{margin:8mm}.barcode-grid{gap:5mm}.barcode-label{border-color:#94a3b8}}
+    </style></head><body><h1>Master Barcode</h1><main class="barcode-grid">${labels}</main>
+    <script>window.addEventListener('load',function(){setTimeout(function(){window.print()},150)})<\/script>
+    </body></html>`);
+  printWindow.document.close();
 }
 
 function openModalEditMaster(sku) {
@@ -3744,31 +4320,51 @@ function parseProductionBarcode(rawValue) {
   }
   if (matchedRules.length === 1) {
     const rule = matchedRules[0];
+    const skuStart = Number(rule.sku_start);
+    const skuLength = Number(rule.sku_length);
+    const quantityStart = Number(rule.quantity_start);
+    let quantityLength = Number(rule.quantity_length);
+    let dateStart = Number(rule.date_start);
+    const dateLength = Number(rule.date_length);
+    const batchStart = Number(rule.batch_start) || 0;
+    const shiftStart = Number(rule.shift_start) || 0;
+    let requiredLength = Math.max(
+      dateStart + dateLength - 1,
+      batchStart,
+      shiftStart
+    );
+    if (!batchStart && !shiftStart && barcode.length > requiredLength) {
+      dateStart = barcode.length - dateLength + 1;
+      quantityLength = dateStart - quantityStart;
+      requiredLength = barcode.length;
+    }
     const ranges = [
-      { start: Number(rule.sku_start), length: Number(rule.sku_length) },
-      { start: Number(rule.quantity_start), length: Number(rule.quantity_length) },
-      { start: Number(rule.date_start), length: Number(rule.date_length) }
+      { start: skuStart, length: skuLength },
+      { start: quantityStart, length: quantityLength },
+      { start: dateStart, length: dateLength },
+      ...(batchStart ? [{ start: batchStart, length: 1 }] : []),
+      ...(shiftStart ? [{ start: shiftStart, length: 1 }] : [])
     ];
     const rangesValid = ranges.every(range => Number.isInteger(range.start) && range.start > 0 &&
       Number.isInteger(range.length) && range.length > 0);
     const rangesOverlap = ranges.some((range, index) => ranges.slice(index + 1).some(other =>
       range.start < other.start + other.length && other.start < range.start + range.length
     ));
-    if (!rangesValid || rangesOverlap || String(rule.prefix).length !== ranges[0].length ||
-        ranges[2].length !== 6 || barcode.length < Math.max(...ranges.map(range => range.start + range.length - 1))) {
+    if (!rangesValid || rangesOverlap || String(rule.prefix).length !== skuLength ||
+        dateLength !== 6 || barcode.length !== requiredLength) {
       return { error: 'Pengaturan range Master Prefix SKU tidak valid atau barcode terlalu pendek.' };
     }
     const product = findMasterBarang(rule.sku);
-    const quantityStart = Number(rule.quantity_start);
-    const quantityLength = Number(rule.quantity_length);
-    const dateStart = Number(rule.date_start);
-    const dateLength = Number(rule.date_length);
     const quantityPart = barcode.slice(quantityStart - 1, quantityStart - 1 + quantityLength);
     const datePart = barcode.slice(dateStart - 1, dateStart - 1 + dateLength);
     const quantity = /^\d+$/.test(quantityPart) ? Number(quantityPart) : NaN;
+    const batch = batchStart ? barcode.slice(batchStart - 1, batchStart) : '';
+    const shift = shiftStart ? barcode.slice(shiftStart - 1, shiftStart) : '';
     if (!product) return { error: `SKU "${rule.sku}" pada aturan prefix tidak ditemukan di Master Barang.` };
     if (!Number.isInteger(quantity) || quantity <= 0) return { error: 'Jumlah pada barcode harus berupa angka bulat lebih dari 0.' };
     if (dateLength !== 6 || !/^\d{6}$/.test(datePart)) return { error: 'Tanggal produksi pada barcode harus berformat YYMMDD (6 digit).' };
+    if (batchStart && !/^\d$/.test(batch)) return { error: 'Batch pada barcode harus terdiri dari 1 digit angka.' };
+    if (shiftStart && !/^[PM]$/.test(shift)) return { error: 'Shift pada barcode harus P atau M.' };
     const year = 2000 + Number(datePart.slice(0, 2));
     const month = Number(datePart.slice(2, 4));
     const day = Number(datePart.slice(4, 6));
@@ -3780,8 +4376,8 @@ function parseProductionBarcode(rawValue) {
       product,
       quantity,
       date: `${year}-${datePart.slice(2, 4)}-${datePart.slice(4, 6)}`,
-      batch: '',
-      shift: '',
+      batch,
+      shift,
       source: 'sku-prefix'
     };
   }
@@ -3791,8 +4387,30 @@ function parseProductionBarcode(rawValue) {
 
   products.forEach(product => {
     const sku = String(product.sku || '').trim().toUpperCase();
-    if (!sku || !barcode.startsWith(sku)) return;
-    const suffix = barcode.slice(sku.length);
+    const compactSku = sku.replace(/[^A-Z0-9]/g, '');
+    if (!compactSku || !barcode.startsWith(compactSku)) return;
+    const suffix = barcode.slice(compactSku.length);
+    if (/^\d{7,}$/.test(suffix)) {
+      const datePart = suffix.slice(-6);
+      const quantityPart = suffix.slice(0, -6);
+      const year = 2000 + Number(datePart.slice(0, 2));
+      const month = Number(datePart.slice(2, 4));
+      const day = Number(datePart.slice(4, 6));
+      const date = new Date(Date.UTC(year, month - 1, day));
+      const quantity = /^\d+$/.test(quantityPart) ? Number(quantityPart) : NaN;
+      if (Number.isInteger(quantity) && quantity > 0 &&
+          date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day) {
+        candidates.push({
+          product,
+          quantity,
+          date: `${year}-${datePart.slice(2, 4)}-${datePart.slice(4, 6)}`,
+          batch: '',
+          shift: '',
+          source: 'sku-prefix'
+        });
+      }
+    }
+
     const shiftMatch = suffix.match(/^(\d+)([A-Z])$/);
     if (!shiftMatch) return;
     const numericPart = shiftMatch[1];
@@ -3819,7 +4437,7 @@ function parseProductionBarcode(rawValue) {
     }
   });
 
-  if (!candidates.length) return { error: 'Barcode tidak cocok. Format yang didukung: SKU + qty + tanggal YYMMDD + batch + shift (contoh OMD2242610153P).' };
+  if (!candidates.length) return { error: 'Barcode tidak cocok. Format yang didukung: SKU + qty + tanggal YYMMDD, atau SKU + qty + tanggal YYMMDD + batch + shift.' };
   const longestSkuLength = Math.max(...candidates.map(candidate => String(candidate.product.sku).length));
   const bestCandidates = candidates.filter(candidate => String(candidate.product.sku).length === longestSkuLength);
   if (bestCandidates.length !== 1) return { error: 'Barcode memiliki lebih dari satu kemungkinan pembacaan. Periksa format SKU, qty, tanggal, batch, dan shift.' };
@@ -3866,9 +4484,13 @@ function prosesProductionBarcode() {
   row.dataset.tanggalProduksi = parsed.source === 'sku-prefix' ? parsed.date : '';
   row.dataset.barcodeSku = parsed.product.sku;
   const metadata = row.querySelector('.row-production-meta');
+  const batchShift = [
+    parsed.batch ? `Batch ${parsed.batch}` : '',
+    parsed.shift ? `Shift ${parsed.shift}` : ''
+  ].filter(Boolean).join(' | ');
   metadata.textContent = parsed.source === 'sku-prefix'
-    ? `Barcode produksi: ${parsed.product.sku} - ${parsed.product.nama} | Qty ${parsed.quantity} | Tanggal produksi ${parsed.date}`
-    : `Barcode produksi: Batch ${parsed.batch} | Shift ${parsed.shift}${parsed.shift === 'P' ? ' (Pagi)' : ''}`;
+    ? `Barcode produksi: ${parsed.product.sku} - ${parsed.product.nama} | Qty ${parsed.quantity} | Tanggal produksi ${parsed.date}${batchShift ? ` | ${batchShift}` : ''}`
+    : `Barcode produksi: ${batchShift}${parsed.shift === 'P' ? ' (Pagi)' : ''}`;
   metadata.style.display = 'block';
   input.value = '';
   input.focus();
@@ -3910,6 +4532,7 @@ function simpanBatchTransaksi(shouldPrintSuratJalan = false) {
   }
 
   const tipe = document.getElementById("tipeTrans").value;
+  if (tipe === 'KELUAR' && !requireFeatureAccess('outbound_input', 'Input Barang Keluar')) return;
   if (tipe === 'TRANSFER' && !requireFeatureAccess('transfer_send', 'Kirim Transfer')) return;
   const gudang = document.getElementById("selectGudangMain").value;
   const gudangTujuan = document.getElementById("selectGudangTujuan").value;
@@ -4282,6 +4905,7 @@ function bukaModalProsesReceipt(id) {
     batch_no: item.batch_no || '',
     shift: item.shift || '',
     tanggal_produksi: item.tanggal_produksi || '',
+    foto_bukti: item.foto_bukti || '',
     kategori_produk: item.kategori_produk,
     kategori_masuk: `Transfer Dari ${item.gudang_asal}`,
     qty: item.qty_gr,
@@ -4308,8 +4932,11 @@ function prosesManufaktur(e) {
   const tanggal = document.getElementById("mfgTanggal").value;
   const rows = Array.from(document.querySelectorAll(".mfg-input-row"));
   const productionInputs = rows.map(row => ({
+    row,
     bomId: row.querySelector(".mfg-row-bom").value,
     qty: Number(row.querySelector(".mfg-row-qty").value),
+    batch: row.querySelector(".mfg-row-batch")?.value.trim() || '',
+    shift: row.querySelector(".mfg-row-shift")?.value || '',
     bom: (appState.masterBOM || []).find(item => item.id == row.querySelector(".mfg-row-bom").value)
   }));
 
@@ -4317,6 +4944,11 @@ function prosesManufaktur(e) {
     return alert("Pilih gudang dan lengkapi setiap baris BOM serta Qty.");
   }
   if (!tanggal) return alert("Pilih Tanggal Manufaktur!");
+  if (productionInputs.some(({ batch, shift }) =>
+    (batch && !/^\d$/.test(batch)) || (shift && !/^[PM]$/.test(shift))
+  )) {
+    return alert("Batch harus 1 digit angka dan shift harus P atau M.");
+  }
 
   // PENGECEKAN CUSTOM BACKDATE (MANUFAKTUR)
   if (!appState.allowBackdate && isBackdate(tanggal)) {
@@ -4338,8 +4970,19 @@ function prosesManufaktur(e) {
     }
   }
 
+  const outputBarcodes = new Map();
+  for (const { row, bom, qty, batch, shift } of productionInputs) {
+    const masterOutput = findMasterBarang(bom.sku_hasil);
+    if (tahap !== 'Finish Good' || masterOutput?.kategori_produk !== 'Finish Good') continue;
+    const rule = (appState.skuBarcodeRules || []).find(item => item.sku === bom.sku_hasil);
+    if (!rule) continue;
+    const result = formatSkuProductionBarcode(rule, qty, tanggal, batch, shift);
+    if (result.error) return alert(`${bom.sku_hasil}: ${result.error}`);
+    outputBarcodes.set(row, result.barcode);
+  }
+
   const batchIdMfg = `MFG-${Date.now()}`;
-  productionInputs.forEach(({ bom, qty }) => {
+  productionInputs.forEach(({ row, bom, qty, batch, shift }) => {
     (bom.items || []).forEach(component => {
       const requiredTotal = Number(component.qty) * qty;
       const masterComponent = findMasterBarang(component.sku);
@@ -4362,6 +5005,10 @@ function prosesManufaktur(e) {
       id: Date.now() + Math.random(), no_sj: batchIdMfg, tipe: 'MASUK', gudang,
       sub_lokasi: subLokasi,
       kode: bom.sku_hasil, nama_barang: outputName, kode_produksi: outputProductionCode,
+      barcode_scan: outputBarcodes.get(row) || '',
+      batch_no: batch,
+      shift,
+      tanggal_produksi: outputBarcodes.has(row) ? tanggal : '',
       kategori_produk: outputCategory, kategori_masuk: `Hasil Manufaktur (${bom.nama_bom})`,
       qty, tanggal, pengirim_kurir: 'Manufaktur Internal', input_by: currentUser ? currentUser.name : 'System'
     });
@@ -4427,6 +5074,8 @@ function simpanEditTransaksi(e) {
 
     // PENGECEKAN STOK MINUS EDIT TRANSAKSI
     const newTipeEdit = document.getElementById("editTipe").value;
+    if (newTipeEdit === 'KELUAR' && item.tipe !== 'KELUAR' &&
+        !requireFeatureAccess('outbound_input', 'Input Barang Keluar')) return;
     const newQtyEdit = Number(document.getElementById("editQty").value);
     if (!appState.allowNegativeStock) {
       const stokSekarang = calculateStockRealtime(item.kode, item.gudang);
@@ -4529,12 +5178,25 @@ function exportToExcel() {
 }
 
 function bukaModalHapusSemuaData() {
-  if (currentUser && currentUser.crud && currentUser.crud.delete === false) {
-    return alert("Akses Ditolak: Anda tidak memiliki izin [Delete]!");
+  if (!currentUser || currentUser.role !== 'superadmin') {
+    return alert("Akses ditolak. Hanya Superadmin yang dapat menghapus semua data transaksi.");
   }
-  bukaModalGeneralDelete("Apakah Anda yakin ingin MENGHAPUS SEMUA DATA TRANSAKSI? Tindakan ini tidak dapat dibatalkan.", () => {
+  bukaModalGeneralDelete("Apakah Anda yakin ingin MENGHAPUS SEMUA DATA TRANSAKSI? Tindakan ini tidak dapat dibatalkan.", async () => {
+    await syncChain;
+    const r = await apiCall('clear_transactions', {});
+    if (!r.ok || r.body.status !== 'success') {
+      alert('Gagal menghapus data transaksi: ' + (r.body.message || 'Kesalahan tidak diketahui.'));
+      if (r.status === 401) {
+        currentUser = null;
+        showLogin();
+      } else if (r.status === 409) {
+        await reloadFromServer();
+      }
+      return;
+    }
     appState.transactions = [];
-    saveData();
+    serverSnapshot.transactions = '[]';
+    serverRevisions.transactions = r.body.revision;
     renderDashboard(1);
     renderLaporanStok(1);
     alert("Semua data transaksi telah dihapus.");
@@ -4690,6 +5352,8 @@ function tambahBarisMfg(bomId = '', qty = 1) {
         <input class="mfg-row-qty" type="number" step="any" min="0.0001" value="${qty}" oninput="updateMfgKodeProduksiAuto()" required>
         <small class="mfg-row-kode-prod"></small>
       </div>
+      <div class="mfg-row-batch-field" style="display:none;"><label>Batch (1 digit)</label><input class="mfg-row-batch" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" oninput="updateMfgKodeProduksiAuto()"></div>
+      <div class="mfg-row-shift-field" style="display:none;"><label>Shift</label><select class="mfg-row-shift" onchange="updateMfgKodeProduksiAuto()"><option value="">Pilih</option><option value="P">P</option><option value="M">M</option></select></div>
       <button type="button" class="btn-danger" onclick="document.getElementById('${rowId}').remove(); updateMfgKodeProduksiAuto()">Hapus</button>
     </div>`);
   renderBOMDropdownOptions();
@@ -4770,8 +5434,28 @@ function updateMfgKodeProduksiAuto() {
     if (!preview) return;
     const masterOutput = bom ? findMasterBarang(bom.sku_hasil) : null;
     const outputCategory = masterOutput ? masterOutput.kategori_produk : mfgTahap;
+    const batchField = row.querySelector('.mfg-row-batch-field');
+    const shiftField = row.querySelector('.mfg-row-shift-field');
+    const showProductionFields = mfgTahap === 'Finish Good' && outputCategory === 'Finish Good';
+    const rule = bom && mfgTahap === 'Finish Good' && outputCategory === 'Finish Good'
+      ? (appState.skuBarcodeRules || []).find(item => item.sku === bom.sku_hasil)
+      : null;
+    if (batchField) batchField.style.display = showProductionFields ? '' : 'none';
+    if (shiftField) shiftField.style.display = showProductionFields ? '' : 'none';
+    row.classList.toggle('has-production-fields', showProductionFields);
     if (!bom || outputCategory !== "Finish Good") {
       preview.textContent = "";
+      return;
+    }
+    if (rule) {
+      const result = formatSkuProductionBarcode(
+        rule,
+        Number(row.querySelector('.mfg-row-qty')?.value),
+        tglInput,
+        row.querySelector('.mfg-row-batch')?.value || '',
+        row.querySelector('.mfg-row-shift')?.value || ''
+      );
+      preview.textContent = result.barcode ? `Barcode Prefix: ${result.barcode}` : `Barcode Prefix: ${result.error}`;
       return;
     }
     preview.textContent = `Kode Produksi: ${generateKodeProduksi(masterOutput ? masterOutput.nama : bom.sku_hasil, tglInput)}`;
@@ -4966,7 +5650,6 @@ function handleItemScanEnter(e) {
 
       if (isFullyCompleted) {
         setTimeout(() => {
-          alert(`✅ AWB ${currentLockedAWB} TERPENUHI 100%! Sistem melakukan simpan otomatis.`);
           submitMultiScanEcom();
         }, 150);
         return;
@@ -5170,7 +5853,6 @@ function submitPDAScanRetur() {
   });
 
   saveData();
-  alert(`Barang Retur Berhasil Dimasukkan Ke Gudang ${gudang}!`);
   resetPDAReturState();
   renderDashboard(1);
   renderTabelRetur(1);
@@ -5400,7 +6082,10 @@ function handleCekEanEnter(e) {
 // ==========================================
 let cekState = { mode: '', gudang: '', sku: '', items: [] };
 let cekScanPendingProduct = null;
+let cekScanPendingProduction = null;
+let cekScanPendingVerification = false;
 let cekScanSession = null;
+let cekScanPhotoBase64 = '';
 let pageCekLokasi = 1;
 let cekFotoBase64 = "";
 let cekTrfSku = "";
@@ -5735,7 +6420,7 @@ function prosesCekEan(silent = false) {
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th class="text-center">No</th><th>Kode SKU</th><th>Nama Barang</th><th class="text-center">Sisa Stok Fisik</th><th>Rincian Sub Lokasi</th><th class="text-center">Aksi</th></tr></thead>
+          <thead><tr><th class="text-center">No</th><th>Kode SKU</th><th>Nama Barang</th><th>Barcode Barang</th><th class="text-center">Sisa Stok Fisik</th><th>Rincian Sub Lokasi</th><th class="text-center">Aksi</th></tr></thead>
           <tbody id="tabelCekLokasi"></tbody>
         </table>
       </div>
@@ -5760,10 +6445,29 @@ function prosesCekEan(silent = false) {
     return;
   }
 
-  const master = findMasterBarang(input);
+  const parsedProductionBarcode = parseProductionBarcode(input);
+  if (parsedProductionBarcode.product) parsedProductionBarcode.barcode = input;
+  const master = findMasterBarang(input) || parsedProductionBarcode.product;
   if (master) {
     if (cekScanSession) {
-      tambahBarangKeSesiScan(master);
+      if (parsedProductionBarcode.product) {
+        const sameSkuItems = Object.values(cekScanSession.items).filter(item =>
+          item.sku.toLowerCase() === master.sku.toLowerCase()
+        );
+        const productionIdentity = `${parsedProductionBarcode.date || 'no-date'}|${parsedProductionBarcode.batch || ''}|${parsedProductionBarcode.shift || ''}`;
+        const sameProductionItem = sameSkuItems.find(item => item.productionIdentity === productionIdentity);
+        if (!sameProductionItem && sameSkuItems.length) {
+          bukaPilihanAksiScan(master, parsedProductionBarcode, true);
+        } else {
+          tambahBarangKeSesiScan(master, parsedProductionBarcode);
+        }
+      } else {
+        tambahBarangKeSesiScan(master);
+      }
+      return;
+    }
+    if (parsedProductionBarcode.product) {
+      bukaPilihanAksiScan(master, parsedProductionBarcode);
       return;
     }
     if (master.set_component_sku) {
@@ -5788,8 +6492,9 @@ function prosesCekEan(silent = false) {
       rows += `<tr>
         <td class="text-center">${idx + 1}</td>
         <td><b>${cekEsc(wh)}</b></td>
+        <td>${renderCekBarcode(master.barcode)}</td>
         <td class="text-center">${cekStokBadge(locationsMap[wh], master.sku)}</td>
-        <td class="text-center"><button class="btn-warning" data-feature="transfer_send,transfer_receive" data-sku="${cekEsc(master.sku)}" data-wh="${cekEsc(wh)}" onclick="bukaModalCekTransfer(this.dataset.sku, this.dataset.wh)">Transfer / Keluar / Terima</button></td>
+        <td class="text-center"><button class="btn-warning" data-feature="transfer_send,transfer_receive,outbound_input" data-sku="${cekEsc(master.sku)}" data-wh="${cekEsc(wh)}" onclick="bukaPilihanAksiScan(findMasterBarang(this.dataset.sku), null, false, this.dataset.wh)">Scan / Transaksi</button></td>
       </tr>`;
     });
 
@@ -5797,14 +6502,14 @@ function prosesCekEan(silent = false) {
       <div class="cek-summary">
         <div class="cek-chip cek-chip-wide"><span>Nama Barang</span><b>${cekEsc(master.nama)}</b></div>
         <div class="cek-chip"><span>Kode SKU</span><code>${cekEsc(master.sku)}</code></div>
-        <div class="cek-chip"><span>EAN-13 Barcode</span><code>${cekEsc(master.barcode || '-')}</code></div>
+        <div class="cek-chip"><span>EAN-13 Barcode</span>${renderCekBarcode(master.barcode)}</div>
         <div class="cek-chip"><span>Kategori Produk</span><b>${cekEsc(master.kategori_produk)}</b></div>
         <div class="cek-chip"><span>Unit of Material (UoM)</span><b>${cekEsc(uomOf(master.sku))}</b></div>
         <div class="cek-chip cek-chip-total"><span>Total Sisa Stok Gudang Terakses</span><b>${totalStokAll} ${cekEsc(uomOf(master.sku))}</b></div>
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th class="text-center">No</th><th>Lokasi Gudang</th><th class="text-center">Sisa Stok di Gudang Ini</th><th class="text-center">Aksi</th></tr></thead>
+          <thead><tr><th class="text-center">No</th><th>Lokasi Gudang</th><th>Barcode Barang</th><th class="text-center">Sisa Stok di Gudang Ini</th><th class="text-center">Aksi</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>`;
@@ -5819,23 +6524,86 @@ function prosesCekEan(silent = false) {
   }
 }
 
-function bukaPilihanAksiScan(product) {
+function bukaPilihanAksiScan(product, production = null, verification = false, selectedWarehouse = '') {
+  if (!product) return alert('Barang tidak ditemukan di Master Barang.');
   if (!currentUser || currentUser.crud?.create === false) {
     return alert('Akses ditolak: Anda tidak memiliki izin Create untuk transaksi scan.');
   }
+  if (production && !cekScanSession &&
+      !hasFeatureAccess('transfer_receive') && !hasFeatureAccess('transfer_send')) {
+    return alert('Akses scan barcode prefix memerlukan izin Terima Barang atau Transfer.');
+  }
   cekScanPendingProduct = product;
+  cekScanPendingProduction = production;
+  cekScanPendingVerification = verification;
+  document.getElementById('cekScanSetupPanel').style.display = '';
+  document.getElementById('cekScanActivePanel').style.display = 'none';
+  if (!cekScanSession) resetCekScanPhoto();
+  else cekScanPhotoBase64 = cekScanSession.foto_bukti || '';
+  document.getElementById('cekScanActionTitle').textContent = production
+    ? (verification ? 'Verifikasi Tanggal Produksi' : 'Scan Prefix SKU')
+    : 'Mulai Transaksi dari Scan';
+  document.querySelector('#modalCekScanAction .cek-modal-card')
+    .classList.toggle('cek-prefix-scan-card', Boolean(production));
+  document.getElementById('cekScanActionTypeLabel').textContent =
+    production ? 'Tipe Transaksi (Terima / Transfer)' : 'Tipe Transaksi';
+  document.getElementById('cekScanWarehouseLabel').textContent =
+    production ? 'Pilih Lokasi Gudang' : 'Gudang';
   document.getElementById('cekScanFirstSkuInfo').textContent =
-    `Produk hasil scan: ${product.sku} - ${product.nama}. Pilih jenis transaksi untuk sesi scan berikutnya.`;
+    `Produk hasil scan: ${product.sku} - ${product.nama}.` +
+    (production ? ` Qty ${production.quantity}, tanggal produksi ${production.date}.` : '') +
+    (verification ? ' Tanggal produksi berbeda dari item sebelumnya. Verifikasi sebelum menambahkan sebagai batch terpisah.' :
+      ' Pilih jenis transaksi untuk sesi scan berikutnya.');
   const warehouses = getAccessibleWarehouses();
   const options = warehouses.map(warehouse =>
     `<option value="${cekEsc(warehouse.nama)}">${cekEsc(warehouse.nama)}</option>`
   ).join('');
   document.getElementById('cekScanWarehouse').innerHTML = options;
   document.getElementById('cekScanDestination').innerHTML = options;
-  document.getElementById('cekScanActionType').value =
-    hasFeatureAccess('transfer_receive') ? 'MASUK' : (hasFeatureAccess('transfer_send') ? 'KELUAR' : 'MASUK');
+  const actionType = document.getElementById('cekScanActionType');
+  const productionBarcodeScan = Boolean(production);
+  const productionTransactionOnly = productionBarcodeScan && !cekScanSession;
+  const canReceive = hasFeatureAccess('transfer_receive');
+  const canTransfer = hasFeatureAccess('transfer_send');
+  Array.from(actionType.options).forEach(option => {
+    option.hidden = productionBarcodeScan && (
+      option.value === 'KELUAR' ||
+      (option.value === 'MASUK' && !canReceive) ||
+      (option.value === 'TRANSFER' && !canTransfer)
+    );
+  });
+  actionType.value = cekScanSession?.type || (
+    productionTransactionOnly
+      ? (canReceive ? 'MASUK' : 'TRANSFER')
+      : (canReceive ? 'MASUK' : (hasFeatureAccess('outbound_input') ? 'KELUAR' : (canTransfer ? 'TRANSFER' : 'MASUK')))
+  );
+  document.getElementById('cekScanWarehouse').value = cekScanSession?.warehouse || selectedWarehouse || warehouses[0]?.nama || '';
+  document.getElementById('cekScanDestination').value = cekScanSession?.destination || warehouses.find(item => item.nama !== cekScanSession?.warehouse)?.nama || '';
+  document.getElementById('cekScanSubLokasi').value = cekScanSession?.sub_lokasi || '';
+  document.getElementById('cekScanDestinationSubLokasi').value = cekScanSession?.sub_lokasi_tujuan || '';
+  const productionDetails = document.getElementById('cekScanProductionDetails');
+  productionDetails.style.display = production ? 'grid' : 'none';
+  document.getElementById('cekScanProductionQty').value = production ? String(production.quantity) : '1';
+  document.getElementById('cekScanProductionDate').textContent = production?.date || '-';
+  document.getElementById('cekScanProductionVerifyNote').textContent = verification
+    ? 'Tanggal produksi berbeda. Qty akan disimpan pada baris batch terpisah setelah diverifikasi.'
+    : '';
+  ['cekScanActionType', 'cekScanWarehouse', 'cekScanSubLokasi', 'cekScanDestination', 'cekScanDestinationSubLokasi']
+    .forEach(id => { document.getElementById(id).disabled = verification; });
   toggleCekScanActionFields();
-  renderSubLocationPicker('cekScanSubLokasi', warehouses[0]?.nama || '');
+  renderSubLocationPicker('cekScanSubLokasi', cekScanSession?.warehouse || selectedWarehouse || warehouses[0]?.nama || '');
+  renderSubLocationPicker('cekScanDestinationSubLokasi', cekScanSession?.destination || '');
+  if (cekScanSession) {
+    document.getElementById('cekScanSubLokasi').value = cekScanSession.sub_lokasi || '';
+    document.getElementById('cekScanDestinationSubLokasi').value = cekScanSession.sub_lokasi_tujuan || '';
+    document.getElementById('cekScanPhotoPreviewWrap').style.display = cekScanSession.foto_bukti ? 'block' : 'none';
+    document.getElementById('cekScanPhotoPreview').src = cekScanSession.foto_bukti || '';
+    document.getElementById('cekScanPhotoInput').disabled = true;
+  }
+  document.querySelector('#modalCekScanAction .modal-actions .btn-primary').textContent =
+    verification ? 'Verifikasi & Tambahkan' :
+      (actionType.value === 'TRANSFER' ? 'Mulai Transfer' :
+        (actionType.value === 'MASUK' ? 'Mulai Terima' : 'Mulai Barang Keluar'));
   document.getElementById('modalCekScanAction').style.display = 'flex';
 }
 
@@ -5846,18 +6614,87 @@ function toggleCekScanActionFields() {
   document.getElementById('cekScanDestinationWrap').style.display = type === 'TRANSFER' ? '' : 'none';
   document.getElementById('cekScanDestinationSubLocationWrap').style.display =
     type === 'TRANSFER' && getSubLocations(destination).length ? '' : 'none';
+  const actionButton = document.querySelector('#modalCekScanAction .modal-actions .btn-primary');
+  if (actionButton && !cekScanPendingVerification) {
+    actionButton.textContent = type === 'TRANSFER'
+      ? 'Mulai Transfer'
+      : (type === 'MASUK' ? 'Mulai Terima' : 'Mulai Barang Keluar');
+  }
+}
+
+function previewCekScanPhoto(input) {
+  const file = input.files?.[0];
+  if (!file) return;
+  if (!file.type.startsWith('image/')) {
+    input.value = '';
+    return alert('File bukti harus berupa gambar.');
+  }
+  const reader = new FileReader();
+  reader.onload = event => {
+    cekScanPhotoBase64 = String(event.target?.result || '');
+    document.getElementById('cekScanPhotoPreview').src = cekScanPhotoBase64;
+    document.getElementById('cekScanPhotoPreviewWrap').style.display = cekScanPhotoBase64 ? 'block' : 'none';
+  };
+  reader.onerror = () => alert('Gagal membaca foto bukti. Silakan pilih ulang file.');
+  reader.readAsDataURL(file);
+}
+
+function resetCekScanPhoto() {
+  cekScanPhotoBase64 = '';
+  const input = document.getElementById('cekScanPhotoInput');
+  if (input) {
+    input.value = '';
+    input.disabled = false;
+  }
+  const preview = document.getElementById('cekScanPhotoPreview');
+  if (preview) preview.src = '';
+  const previewWrap = document.getElementById('cekScanPhotoPreviewWrap');
+  if (previewWrap) previewWrap.style.display = 'none';
 }
 
 function batalCekScanAction() {
+  const sessionActive = Boolean(cekScanSession);
   cekScanPendingProduct = null;
-  document.getElementById('modalCekScanAction').style.display = 'none';
-  document.getElementById('inputCekEan').focus();
+  cekScanPendingProduction = null;
+  cekScanPendingVerification = false;
+  ['cekScanActionType', 'cekScanWarehouse', 'cekScanSubLokasi', 'cekScanDestination', 'cekScanDestinationSubLokasi']
+    .forEach(id => { document.getElementById(id).disabled = false; });
+  document.querySelector('#modalCekScanAction .modal-actions .btn-primary').textContent = 'Mulai Scan';
+  document.getElementById('cekScanActionTitle').textContent = 'Mulai Transaksi dari Scan';
+  document.getElementById('cekScanActionTypeLabel').textContent = 'Tipe Transaksi';
+  document.getElementById('cekScanWarehouseLabel').textContent = 'Gudang';
+  document.getElementById('cekScanSetupPanel').style.display = sessionActive ? 'none' : '';
+  document.getElementById('cekScanActivePanel').style.display = sessionActive ? '' : 'none';
+  document.getElementById('cekScanPhotoInput').disabled = sessionActive;
+  document.querySelector('#modalCekScanAction .cek-modal-card')
+    .classList.toggle('cek-prefix-scan-card', sessionActive);
+  if (sessionActive) {
+    document.getElementById('modalCekScanAction').style.display = 'flex';
+    document.getElementById('cekScanBarcodeInput').focus();
+  } else {
+    resetCekScanPhoto();
+    document.getElementById('modalCekScanAction').style.display = 'none';
+    document.getElementById('inputCekEan').focus();
+  }
 }
 
 function mulaiCekScanAction() {
+  const production = cekScanPendingProduction ? { ...cekScanPendingProduction } : null;
+  if (production) {
+    production.quantity = Number(document.getElementById('cekScanProductionQty').value);
+    if (!Number.isInteger(production.quantity) || production.quantity <= 0) {
+      return alert('Qty dari barcode harus berupa angka bulat lebih dari 0.');
+    }
+  }
+  if (cekScanPendingVerification && cekScanSession && cekScanPendingProduct) {
+    tambahBarangKeSesiScan(cekScanPendingProduct, production);
+    batalCekScanAction();
+    return;
+  }
   const type = document.getElementById('cekScanActionType').value;
-  const feature = type === 'MASUK' ? 'transfer_receive' : 'transfer_send';
-  if (!requireFeatureAccess(feature, type === 'MASUK' ? 'Terima Barang' : 'Kirim / Transfer Barang')) return;
+  const feature = type === 'MASUK' ? 'transfer_receive' : (type === 'KELUAR' ? 'outbound_input' : 'transfer_send');
+  const label = type === 'MASUK' ? 'Terima Barang' : (type === 'KELUAR' ? 'Input Barang Keluar' : 'Kirim Transfer');
+  if (!requireFeatureAccess(feature, label)) return;
   const warehouse = document.getElementById('cekScanWarehouse').value;
   const destination = type === 'TRANSFER' ? document.getElementById('cekScanDestination').value : '';
   if (!warehouse) return alert('Pilih gudang untuk sesi scan.');
@@ -5870,21 +6707,48 @@ function mulaiCekScanAction() {
     destination,
     sub_lokasi: document.getElementById('cekScanSubLokasi').value || '',
     sub_lokasi_tujuan: document.getElementById('cekScanDestinationSubLokasi').value || '',
+    foto_bukti: cekScanPhotoBase64,
     items: {}
   };
-  document.getElementById('modalCekScanAction').style.display = 'none';
-  if (cekScanPendingProduct) tambahBarangKeSesiScan(cekScanPendingProduct);
+  document.getElementById('cekScanSetupPanel').style.display = 'none';
+  document.getElementById('cekScanActivePanel').style.display = '';
+  document.querySelector('#modalCekScanAction .cek-modal-card').classList.add('cek-prefix-scan-card');
+  document.getElementById('cekScanActionTitle').textContent = 'Mulai Transaksi dari Scan';
+  document.getElementById('cekScanActionTypeLabel').textContent = 'Tipe Transaksi';
+  document.getElementById('cekScanWarehouseLabel').textContent = 'Gudang';
+  document.getElementById('cekScanPhotoInput').disabled = true;
+  document.getElementById('modalCekScanAction').style.display = 'flex';
+  if (cekScanPendingProduct) tambahBarangKeSesiScan(cekScanPendingProduct, production);
   cekScanPendingProduct = null;
-  document.getElementById('inputCekEan').value = '';
-  document.getElementById('inputCekEan').focus();
+  cekScanPendingProduction = null;
+  cekScanPendingVerification = false;
+  ['cekScanActionType', 'cekScanWarehouse', 'cekScanSubLokasi', 'cekScanDestination', 'cekScanDestinationSubLokasi']
+    .forEach(id => { document.getElementById(id).disabled = false; });
+  document.querySelector('#modalCekScanAction .modal-actions .btn-primary').textContent = 'Mulai Scan';
+  document.getElementById('cekScanActionTitle').textContent = 'Mulai Transaksi dari Scan';
+  document.getElementById('cekScanActionTypeLabel').textContent = 'Tipe Transaksi';
+  document.getElementById('cekScanWarehouseLabel').textContent = 'Gudang';
+  renderCekScanSession();
+  document.getElementById('cekScanBarcodeInput').focus();
 }
 
-function tambahBarangKeSesiScan(product) {
+function tambahBarangKeSesiScan(product, production = null) {
   if (!cekScanSession) return;
   const sku = product.sku;
-  if (!cekScanSession.items[sku]) cekScanSession.items[sku] = { sku, nama: product.nama, qty: 0 };
-  cekScanSession.items[sku].qty += 1;
-  const input = document.getElementById('inputCekEan');
+  const productionDate = production?.date || '';
+  const batch = production?.batch || '';
+  const shift = production?.shift || '';
+  const productionIdentity = `${productionDate || 'no-date'}|${batch}|${shift}`;
+  const key = encodeURIComponent(`${sku.toLowerCase()}|${productionIdentity}`).replace(/'/g, '%27');
+  if (!cekScanSession.items[key]) {
+    cekScanSession.items[key] = {
+      key, sku, nama: product.nama, qty: 0, productionDate, productionIdentity,
+      batch, shift, barcode: ''
+    };
+  }
+  cekScanSession.items[key].qty += production ? production.quantity : 1;
+  if (production?.barcode) cekScanSession.items[key].barcode = production.barcode;
+  const input = document.getElementById('cekScanBarcodeInput');
   if (input) {
     input.value = '';
     input.focus();
@@ -5892,10 +6756,52 @@ function tambahBarangKeSesiScan(product) {
   renderCekScanSession();
 }
 
+function handleCekScanBarcodeEnter(event) {
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  const input = document.getElementById('cekScanBarcodeInput');
+  const barcode = input.value.trim();
+  if (!barcode) return;
+  const production = parseProductionBarcode(barcode);
+  const product = findMasterBarang(barcode) || production.product;
+  if (!product) {
+    input.value = '';
+    input.focus();
+    return alert(production.error || 'Barcode tidak terdaftar di Master Barang atau Master Prefix SKU.');
+  }
+  if (production.product) production.barcode = barcode;
+  document.getElementById('inputCekEan').value = barcode;
+  input.value = '';
+  prosesCekEan(true);
+  if (document.getElementById('modalCekScanAction').style.display === 'flex' &&
+      document.getElementById('cekScanActivePanel').style.display !== 'none') {
+    input.focus();
+  }
+}
+
 function renderCekScanSession() {
   if (!cekScanSession) return;
   const items = Object.values(cekScanSession.items);
   const typeLabel = { MASUK: 'Terima Barang', TRANSFER: 'Transfer', KELUAR: 'Kirim Barang' }[cekScanSession.type];
+  const totalQty = items.reduce((sum, item) => sum + item.qty, 0);
+  const destinationSummary = cekScanSession.destination ? ` → ${cekScanSession.destination}` : '';
+  document.getElementById('cekScanActiveTitle').textContent = `Scan ${typeLabel}`;
+  document.getElementById('cekScanActiveSummary').textContent =
+    `${cekScanSession.warehouse}${destinationSummary} · ${items.length} batch · ${formatQtyDisplay(totalQty)} unit`;
+  document.getElementById('cekScanActiveCount').textContent = String(items.length);
+  document.getElementById('cekScanLastMessage').textContent = items.length
+    ? 'Scan barcode berikutnya. SKU dengan kode produksi sama akan menambah qty otomatis.'
+    : 'Sesi scan aktif. Scan barcode untuk menambahkan barang.';
+  document.getElementById('cekScanActiveRows').innerHTML = items.length
+    ? items.slice().reverse().map(item => {
+      const productionCode = item.productionDate
+        ? generateKodeProduksi(item.nama, item.productionDate) +
+          (item.batch ? `-${item.batch}` : '') + (item.shift ? `-${item.shift}` : '')
+        : '-';
+      return `<tr><td><code>${cekEsc(item.sku)}</code></td><td>${cekEsc(item.nama)}</td>
+        <td>${cekEsc(productionCode)}</td><td class="text-right">${formatQtyDisplay(item.qty)}</td></tr>`;
+    }).join('')
+    : '<tr><td colspan="4" class="cek-empty">Belum ada item. Scan barcode untuk mulai.</td></tr>';
   document.getElementById('cekEanJudul').textContent = `Sesi Scan: ${typeLabel}`;
   document.getElementById('cekEanDetailContent').innerHTML = `
     <div class="cek-summary">
@@ -5918,13 +6824,34 @@ function bukaRingkasanCekScan() {
     `${rows.length} SKU, ${rows.reduce((sum, item) => sum + item.qty, 0)} unit di ${cekScanSession.warehouse}.`;
   document.getElementById('cekScanSessionRows').innerHTML = rows.map(item => `
     <tr><td><code>${cekEsc(item.sku)}</code></td><td>${cekEsc(item.nama)}</td>
-    <td>${formatQtyDisplay(item.qty)}</td><td>${cekEsc(uomOf(item.sku))}</td></tr>`).join('');
+    <td>${cekEsc(item.productionDate || '-')}</td>
+    <td><input type="number" min="1" step="1" value="${cekEsc(item.qty)}"
+      onchange="ubahQtyCekScanItem('${item.key}', this.value)" aria-label="Qty ${cekEsc(item.sku)}"></td>
+    <td>${cekEsc(uomOf(item.sku))}</td></tr>`).join('');
   document.getElementById('modalCekScanFinish').style.display = 'flex';
+}
+
+function ubahQtyCekScanItem(key, value) {
+  const item = cekScanSession?.items[key];
+  const qty = Number(value);
+  if (!item || !Number.isInteger(qty) || qty <= 0) {
+    alert('Qty harus berupa angka bulat lebih dari 0.');
+    renderCekScanSession();
+    bukaRingkasanCekScan();
+    return;
+  }
+  item.qty = qty;
+  bukaRingkasanCekScan();
 }
 
 function batalCekScanSession() {
   cekScanSession = null;
   document.getElementById('modalCekScanFinish').style.display = 'none';
+  document.getElementById('modalCekScanAction').style.display = 'none';
+  document.getElementById('cekScanSetupPanel').style.display = '';
+  document.getElementById('cekScanActivePanel').style.display = 'none';
+  document.querySelector('#modalCekScanAction .cek-modal-card').classList.remove('cek-prefix-scan-card');
+  resetCekScanPhoto();
   document.getElementById('hasilCekEanContainer').style.display = 'none';
   document.getElementById('inputCekEan').value = '';
   document.getElementById('inputCekEan').focus();
@@ -5934,6 +6861,8 @@ function selesaiCekScanSession() {
   if (!cekScanSession) return;
   if (currentUser?.crud?.create === false) return alert('Akses ditolak: izin Create diperlukan.');
   const session = cekScanSession;
+  if (session.type === 'KELUAR' && !requireFeatureAccess('outbound_input', 'Input Barang Keluar')) return;
+  if (session.type === 'TRANSFER' && !requireFeatureAccess('transfer_send', 'Kirim Transfer')) return;
   const items = Object.values(session.items);
   if (!items.length) return alert('Belum ada SKU yang dipindai.');
   if (!canAccessWarehouseName(session.warehouse) ||
@@ -5941,7 +6870,14 @@ function selesaiCekScanSession() {
     return alert('Akses ke salah satu gudang tidak diizinkan.');
   }
   if ((session.type === 'TRANSFER' || session.type === 'KELUAR') && !appState.allowNegativeStock) {
-    const insufficient = items.find(item => calculateStockRealtime(item.sku, session.warehouse) < item.qty);
+    const quantitiesBySku = items.reduce((totals, item) => {
+      totals[item.sku] = (totals[item.sku] || 0) + item.qty;
+      return totals;
+    }, {});
+    const insufficientSku = Object.keys(quantitiesBySku).find(sku =>
+      calculateStockRealtime(sku, session.warehouse) < quantitiesBySku[sku]
+    );
+    const insufficient = insufficientSku && items.find(item => item.sku === insufficientSku);
     if (insufficient) return alert(`Stok ${insufficient.sku} tidak cukup di ${session.warehouse}.`);
   }
   const today = new Date().toISOString().split('T')[0];
@@ -5950,12 +6886,17 @@ function selesaiCekScanSession() {
   const userName = currentUser ? currentUser.name : 'System';
   items.forEach(item => {
     const master = findMasterBarang(item.sku);
-    const kodeProd = master?.kategori_produk === 'Finish Good' ? generateKodeProduksi(master.nama, today) : '-';
+    const tanggalProduksi = item.productionDate || '';
+    const kodeProd = master?.kategori_produk === 'Finish Good'
+      ? generateKodeProduksi(master.nama, tanggalProduksi || today)
+      : '-';
     const base = {
       id: Date.now() + Math.random(), no_sj: noSJ, gudang: session.warehouse,
       sub_lokasi: session.sub_lokasi, kode: item.sku, nama_barang: item.nama,
+      batch_no: item.batch || '', shift: item.shift || '', barcode_scan: item.barcode || '',
       kode_produksi: kodeProd, kategori_produk: master?.kategori_produk || '-',
-      qty: item.qty, tanggal: today, pengirim_kurir: 'Scan Cek Stok',
+      qty: item.qty, tanggal: today, tanggal_produksi: tanggalProduksi,
+      foto_bukti: session.foto_bukti || '', pengirim_kurir: 'Scan Cek Stok',
       input_by: userName
     };
     if (session.type === 'TRANSFER') {
@@ -5963,6 +6904,9 @@ function selesaiCekScanSession() {
         id: Date.now() + Math.random(), no_sj: noSJ,
         gudang_asal: session.warehouse, gudang_tujuan: session.destination,
         sku: item.sku, nama_barang: item.nama, kode_produksi: kodeProd,
+        batch_no: item.batch || '', shift: item.shift || '', barcode_scan: item.barcode || '',
+        tanggal_produksi: tanggalProduksi,
+        foto_bukti: session.foto_bukti || '',
         kategori_produk: master?.kategori_produk || '-', qty_gd: item.qty, qty_gr: 0,
         status: 'PENDING GR', tanggal: today, pengirim_kurir: 'Scan Cek Stok',
         created_by: userName, sub_lokasi_asal: session.sub_lokasi,
@@ -5982,6 +6926,11 @@ function selesaiCekScanSession() {
   saveData();
   cekScanSession = null;
   document.getElementById('modalCekScanFinish').style.display = 'none';
+  document.getElementById('modalCekScanAction').style.display = 'none';
+  document.getElementById('cekScanSetupPanel').style.display = '';
+  document.getElementById('cekScanActivePanel').style.display = 'none';
+  document.querySelector('#modalCekScanAction .cek-modal-card').classList.remove('cek-prefix-scan-card');
+  resetCekScanPhoto();
   document.getElementById('hasilCekEanContainer').style.display = 'none';
   renderDashboard(1);
   renderLaporanStok(1);
@@ -6007,10 +6956,13 @@ function exportCekStokPdf() {
     );
     const tableRows = rows.length ? rows.map((item, index) => `<tr>
       <td>${index + 1}</td><td><code>${cekEsc(item.sku)}</code></td><td>${cekEsc(item.nama)}</td>
-      <td>${cekStokBadge(item.stok, item.sku)}</td>
-    </tr>`).join('') : `<tr><td colspan="4">Tidak ada produk sesuai filter.</td></tr>`;
+      <td>${renderCekBarcode(item.barcode)}</td><td>${cekStokBadge(item.stok, item.sku)}</td>
+      <td>${Object.entries(item.sub_stok || {}).map(([name, qty]) => `${cekEsc(name)}: ${formatQtyDisplay(qty)} ${cekEsc(uomOf(item.sku))}`).join('<br>') || '-'}</td>
+    </tr>`).join('') : `<tr><td colspan="6">Tidak ada produk sesuai filter.</td></tr>`;
     reportHtml = reportHtml.replace(/<tbody id="tabelCekLokasi">[\s\S]*?<\/tbody>/, `<tbody>${tableRows}</tbody>`);
   }
+  reportHtml = reportHtml.replace('<th class="text-center">Aksi</th>', '');
+  reportHtml = reportHtml.replace(/<td class="text-center"><button[\s\S]*?<\/button><\/td>/g, '');
 
   const printWindow = window.open('', '_blank');
   if (!printWindow) return alert("Pop-up diblokir browser. Izinkan pop-up untuk mengekspor PDF.");
@@ -6021,6 +6973,7 @@ function exportCekStokPdf() {
       .cek-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px}
       .cek-chip{border:1px solid #cbd5e1;padding:8px}.cek-chip span{display:block;color:#475569;font-size:10px}
       table{width:100%;border-collapse:collapse;font-size:11px}th,td{border:1px solid #94a3b8;padding:7px;text-align:left}
+      .cek-barcode{min-width:145px}.cek-barcode svg{width:140px;height:auto}.cek-barcode small{display:block;text-align:center;font-size:9px}
       th{background:#e2e8f0}.cek-toolbar,button,.pagination-bar{display:none!important}
       @media print{body{margin:12mm}}
     </style></head><body><h1>${cekEsc(title)}</h1>${reportHtml}</body></html>`);
@@ -6047,15 +7000,16 @@ function renderCekLokasiTable(page = 1) {
   const endIndex = Math.min(startIndex + pageSize, totalItems);
 
   if (totalItems === 0) {
-    tbody.innerHTML = `<tr><td colspan="6" class="cek-empty">${(q || kategoriFilter) ? 'Tidak ada barang yang cocok dengan pencarian / filter kategori.' : 'Tidak ada barang di lokasi gudang ini.'}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="cek-empty">${(q || kategoriFilter) ? 'Tidak ada barang yang cocok dengan pencarian / filter kategori.' : 'Tidak ada barang di lokasi gudang ini.'}</td></tr>`;
   } else {
     tbody.innerHTML = filtered.slice(startIndex, endIndex).map((item, i) => `<tr>
       <td class="text-center">${startIndex + i + 1}</td>
       <td><code>${cekEsc(item.sku)}</code></td>
       <td><b>${cekEsc(item.nama)}</b></td>
+      <td>${renderCekBarcode(item.barcode)}</td>
       <td class="text-center">${cekStokBadge(item.stok, item.sku)}</td>
       <td>${Object.entries(item.sub_stok || {}).map(([name, qty]) => `${cekEsc(name)}: ${formatQtyDisplay(qty)} ${cekEsc(uomOf(item.sku))}`).join('<br>') || '-'}</td>
-      <td class="text-center"><button class="btn-warning" data-feature="transfer_send,transfer_receive" data-sku="${cekEsc(item.sku)}" data-wh="${cekEsc(cekState.gudang)}" onclick="bukaModalCekTransfer(this.dataset.sku, this.dataset.wh)">Transfer / Keluar / Terima</button></td>
+      <td class="text-center"><button class="btn-warning" data-feature="transfer_send,transfer_receive,outbound_input" data-sku="${cekEsc(item.sku)}" onclick="bukaPilihanAksiScan(findMasterBarang(this.dataset.sku))">Scan / Transaksi</button></td>
     </tr>`).join('');
   }
 
@@ -6092,7 +7046,7 @@ function previewCekFoto(input) {
 }
 
 function bukaModalCekTransfer(sku, gudang) {
-  if (!hasFeatureAccess('transfer_send') && !hasFeatureAccess('transfer_receive')) return alert("Akses ditolak: Anda tidak memiliki izin Kirim maupun Terima Barang.");
+  if (!hasFeatureAccess('transfer_send') && !hasFeatureAccess('transfer_receive') && !hasFeatureAccess('outbound_input')) return alert("Akses ditolak: Anda tidak memiliki izin Input Barang Keluar, Kirim, maupun Terima Barang.");
   if (currentUser && currentUser.crud && currentUser.crud.create === false) {
     return alert("Akses Ditolak: Anda tidak memiliki izin [Create] untuk membuat transaksi baru!");
   }
@@ -6113,7 +7067,9 @@ function bukaModalCekTransfer(sku, gudang) {
   cekTrfSku = master.sku;
   document.getElementById("cekTrfUomLbl").textContent = uomOf(master.sku);
   document.getElementById("cekTrfBarangInfo").textContent = `${master.sku} - ${master.nama}`;
-  document.getElementById("cekTrfTipe").value = "TRANSFER";
+  document.getElementById("cekTrfTipe").value = hasFeatureAccess('transfer_send')
+    ? 'TRANSFER'
+    : (hasFeatureAccess('outbound_input') ? 'KELUAR' : 'MASUK');
   document.getElementById("cekTrfQty").value = 1;
   document.getElementById("cekTrfTanggal").value = new Date().toISOString().split("T")[0];
   document.getElementById("cekTrfNoSJ").value = "";
@@ -6166,7 +7122,8 @@ function simpanCekTransfer(e) {
 
   const master = findMasterBarang(cekTrfSku);
   const tipe = document.getElementById("cekTrfTipe").value;
-  if ((tipe === 'TRANSFER' || tipe === 'KELUAR') && !requireFeatureAccess('transfer_send', 'Kirim / Keluar Barang')) return;
+  if (tipe === 'TRANSFER' && !requireFeatureAccess('transfer_send', 'Kirim Transfer')) return;
+  if (tipe === 'KELUAR' && !requireFeatureAccess('outbound_input', 'Input Barang Keluar')) return;
   if (tipe === 'MASUK' && !requireFeatureAccess('transfer_receive', 'Terima Barang')) return;
   const gudang = document.getElementById("cekTrfGudang").value;
   const tujuan = document.getElementById("cekTrfTujuan").value;

@@ -36,14 +36,24 @@ CREATE TABLE IF NOT EXISTS users (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- ---------------------------------------------------------------------
--- 1b. SATU SESI AKTIF PER AKUN
---     Login baru ditolak saat sesi lain aktif; sesi idle berakhir setelah 3 menit.
+-- 1b. SESI LOGIN
+--     Secara default satu sesi aktif per akun; opsi Master Akun dapat mengizinkan banyak sesi.
 -- ---------------------------------------------------------------------
+-- Tabel lama dipertahankan untuk migrasi otomatis oleh api.php.
 CREATE TABLE IF NOT EXISTS user_sessions (
   username VARCHAR(64) NOT NULL PRIMARY KEY,
   session_hash CHAR(64) NOT NULL,
   last_seen TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_user_sessions_user FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Satu baris per perangkat/session agar opsi akses bersamaan dapat diterapkan.
+CREATE TABLE IF NOT EXISTS user_session_devices (
+  username VARCHAR(64) NOT NULL,
+  session_hash CHAR(64) NOT NULL,
+  last_seen TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (username, session_hash),
+  CONSTRAINT fk_user_session_devices_user FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- ---------------------------------------------------------------------

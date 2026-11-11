@@ -85,6 +85,7 @@ function publicUser(array $row) {
             'export'=>true, 'import'=>true, 'pdf'=>true,
             'pda_ecommerce'=>true, 'pda_retur'=>true,
             'transfer_send'=>true, 'transfer_receive'=>true,
+            'outbound_input'=>true, 'allow_multiple_sessions'=>false,
         ], decodeCol($row['crud'], [])),
         'allowed_menus'      => decodeCol($row['allowed_menus'], []),
         'allowed_warehouses' => normalizeAllowedWarehouses(decodeCol($row['allowed_warehouses'], ['ALL'])),
@@ -106,24 +107,47 @@ function currentSessionHash() {
     return hash('sha256', session_id());
 }
 
-function claimUserSession(PDO $pdo, $username, $sessionHash, $previousSessionHash = null) {
+function ensureConcurrentUserSessionStore(PDO $pdo) {
+    $pdo->exec("CREATE TABLE IF NOT EXISTS user_session_devices (
+        username VARCHAR(64) NOT NULL,
+        session_hash CHAR(64) NOT NULL,
+        last_seen TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (username, session_hash),
+        CONSTRAINT fk_user_session_devices_user FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    $pdo->exec("INSERT IGNORE INTO user_session_devices (username, session_hash, last_seen)
+                SELECT username, session_hash, last_seen FROM user_sessions");
+    $pdo->exec("DELETE FROM user_sessions");
+}
+
+function claimUserSession(PDO $pdo, $username, $sessionHash, $previousSessionHash = null, $allowMultiple = false) {
     $pdo->beginTransaction();
     try {
-        $stmt = $pdo->prepare("SELECT session_hash, last_seen,
-                                      (last_seen >= DATE_SUB(CURRENT_TIMESTAMP, INTERVAL " . USER_SESSION_IDLE_TIMEOUT . " SECOND)) AS is_active
-                               FROM user_sessions WHERE username = ? FOR UPDATE");
+        $stmt = $pdo->prepare("SELECT username FROM users WHERE username = ? FOR UPDATE");
         $stmt->execute([$username]);
-        $active = $stmt->fetch();
-        if ($active &&
-            !hash_equals($active['session_hash'], $sessionHash) &&
-            ($previousSessionHash === null || !hash_equals($active['session_hash'], $previousSessionHash)) &&
-            !empty($active['is_active'])) {
+        if (!$stmt->fetch()) {
             $pdo->rollBack();
             return false;
         }
 
-        $stmt = $pdo->prepare("INSERT INTO user_sessions (username, session_hash, last_seen) VALUES (?, ?, CURRENT_TIMESTAMP)
-                               ON DUPLICATE KEY UPDATE session_hash = VALUES(session_hash), last_seen = CURRENT_TIMESTAMP");
+        $stmt = $pdo->prepare("DELETE FROM user_session_devices
+                               WHERE username = ? AND last_seen < DATE_SUB(CURRENT_TIMESTAMP, INTERVAL " . USER_SESSION_IDLE_TIMEOUT . " SECOND)");
+        $stmt->execute([$username]);
+        $stmt = $pdo->prepare("SELECT session_hash FROM user_session_devices
+                               WHERE username = ? AND last_seen >= DATE_SUB(CURRENT_TIMESTAMP, INTERVAL " . USER_SESSION_IDLE_TIMEOUT . " SECOND)
+                               FOR UPDATE");
+        $stmt->execute([$username]);
+        foreach ($stmt->fetchAll() as $active) {
+            if (!$allowMultiple &&
+                !hash_equals($active['session_hash'], $sessionHash) &&
+                ($previousSessionHash === null || !hash_equals($active['session_hash'], $previousSessionHash))) {
+                $pdo->rollBack();
+                return false;
+            }
+        }
+
+        $stmt = $pdo->prepare("INSERT INTO user_session_devices (username, session_hash, last_seen) VALUES (?, ?, CURRENT_TIMESTAMP)
+                               ON DUPLICATE KEY UPDATE last_seen = CURRENT_TIMESTAMP");
         $stmt->execute([$username, $sessionHash]);
         $pdo->commit();
         return true;
@@ -135,25 +159,13 @@ function claimUserSession(PDO $pdo, $username, $sessionHash, $previousSessionHas
 
 function validateUserSession(PDO $pdo, $username) {
     $sessionHash = currentSessionHash();
-    $stmt = $pdo->prepare("SELECT session_hash FROM user_sessions WHERE username = ?");
-    $stmt->execute([$username]);
-    $active = $stmt->fetch();
-
-    if (!$active) {
-        $stmt = $pdo->prepare("INSERT IGNORE INTO user_sessions (username, session_hash, last_seen) VALUES (?, ?, CURRENT_TIMESTAMP)");
-        $stmt->execute([$username, $sessionHash]);
-        $stmt = $pdo->prepare("SELECT session_hash FROM user_sessions WHERE username = ?");
-        $stmt->execute([$username]);
-        $active = $stmt->fetch();
-    }
-
-    if (!$active || !hash_equals($active['session_hash'], $sessionHash)) return false;
-    $stmt = $pdo->prepare("UPDATE user_sessions SET last_seen = CURRENT_TIMESTAMP WHERE username = ? AND session_hash = ?");
+    $stmt = $pdo->prepare("SELECT session_hash FROM user_session_devices WHERE username = ? AND session_hash = ?");
     $stmt->execute([$username, $sessionHash]);
-    $stmt = $pdo->prepare("SELECT session_hash FROM user_sessions WHERE username = ?");
-    $stmt->execute([$username]);
     $active = $stmt->fetch();
-    return $active && hash_equals($active['session_hash'], $sessionHash);
+    if (!$active || !hash_equals($active['session_hash'], $sessionHash)) return false;
+    $stmt = $pdo->prepare("UPDATE user_session_devices SET last_seen = CURRENT_TIMESTAMP WHERE username = ? AND session_hash = ?");
+    $stmt->execute([$username, $sessionHash]);
+    return true;
 }
 
 function canAccessWarehouseForUser(array $user, $warehouse) {
@@ -577,6 +589,7 @@ function checkTransactionsPermission(array $old, array $new, array $user) {
     $canCreate = !empty($crud['create']);
     $canUpdate = !empty($crud['update']);
     $canDelete = !empty($crud['delete']);
+    $canInputOutbound = !array_key_exists('outbound_input', $crud) || !empty($crud['outbound_input']);
 
     $map = function ($list) {
         $m = [];
@@ -599,6 +612,20 @@ function checkTransactionsPermission(array $old, array $new, array $user) {
         if (!isset($oldMap[$id]) && !$canCreate) {
             return "Akses ditolak: izin [Create] diperlukan untuk membuat transaksi.";
         }
+        if (!$canInputOutbound) {
+            $item = json_decode($json, true) ?: [];
+            $oldItem = isset($oldMap[$id]) ? (json_decode($oldMap[$id], true) ?: []) : [];
+            $type = strtoupper((string)($item['tipe'] ?? ''));
+            $oldType = strtoupper((string)($oldItem['tipe'] ?? ''));
+            $destination = strtolower((string)($item['tujuan_keluar'] ?? ''));
+            $inputBy = strtolower((string)($item['input_by'] ?? ''));
+            $isTransfer = strpos($destination, 'transfer ke ') === 0;
+            $isPda = strpos($inputBy, '(pda)') !== false;
+            $isOpnameAdjustment = strpos($inputBy, '(opname adjustment)') !== false;
+            if ($type === 'KELUAR' && $oldType !== 'KELUAR' && !$isTransfer && !$isPda && !$isOpnameAdjustment) {
+                return "Akses ditolak: izin [Input Barang Keluar] diperlukan.";
+            }
+        }
     }
     return null;
 }
@@ -606,9 +633,10 @@ function checkTransactionsPermission(array $old, array $new, array $user) {
 try {
     migrateLegacyAppState($pdo);
     migrateLegacyDomainTables($pdo);
+    ensureConcurrentUserSessionStore($pdo);
 } catch (Throwable $e) {
-    error_log("Gagal memigrasikan data ke tabel domain terstruktur: " . $e->getMessage());
-    fail("Gagal menyiapkan penyimpanan tabel terstruktur. Data lama tetap dipertahankan.", 500);
+    error_log("Gagal menyiapkan penyimpanan aplikasi: " . $e->getMessage());
+    fail("Gagal menyiapkan penyimpanan aplikasi. Data lama tetap dipertahankan.", 500);
 }
 
 // --------------------------------------------------------------------------
@@ -658,7 +686,9 @@ switch ($action) {
         if ($row && password_verify($password, $row['password_hash'])) {
             $previousSessionHash = currentSessionHash();
             session_regenerate_id(true);
-            if (!claimUserSession($pdo, $row['username'], currentSessionHash(), $previousSessionHash)) {
+            $userCrud = decodeCol($row['crud'] ?? null, []);
+            $allowMultipleSessions = !empty($userCrud['allow_multiple_sessions']);
+            if (!claimUserSession($pdo, $row['username'], currentSessionHash(), $previousSessionHash, $allowMultipleSessions)) {
                 fail("Akun ini sedang digunakan di perangkat lain. Coba lagi setelah sesi tersebut logout atau tidak aktif selama 3 menit.", 409);
             }
             $_SESSION = ['username' => $row['username']];
@@ -675,7 +705,7 @@ switch ($action) {
 
     case 'logout':
         if (!empty($_SESSION['username'])) {
-            $stmt = $pdo->prepare("DELETE FROM user_sessions WHERE username = ? AND session_hash = ?");
+            $stmt = $pdo->prepare("DELETE FROM user_session_devices WHERE username = ? AND session_hash = ?");
             $stmt->execute([$_SESSION['username'], currentSessionHash()]);
         }
         $_SESSION = [];
@@ -797,6 +827,9 @@ switch ($action) {
                 'pda_retur' => array_key_exists('pda_retur', $crudIn) ? !empty($crudIn['pda_retur']) : true,
                 'transfer_send' => array_key_exists('transfer_send', $crudIn) ? !empty($crudIn['transfer_send']) : true,
                 'transfer_receive' => array_key_exists('transfer_receive', $crudIn) ? !empty($crudIn['transfer_receive']) : true,
+                'outbound_input' => array_key_exists('outbound_input', $crudIn) ? !empty($crudIn['outbound_input']) : true,
+                'custom_barcode' => !empty($crudIn['custom_barcode']),
+                'allow_multiple_sessions' => !empty($crudIn['allow_multiple_sessions']),
             ];
             $menus = array_values(array_filter(is_array($u['allowed_menus'] ?? null) ? $u['allowed_menus'] : [], 'is_string'));
             $whs   = normalizeAllowedWarehouses($u['allowed_warehouses'] ?? []);
@@ -838,8 +871,15 @@ switch ($action) {
         }
         $pdo->commit();
 
-        // Jika akun yang sedang login di-rename, perbarui session
-        if (isset($renameMap[$_SESSION['username']])) $_SESSION['username'] = $renameMap[$_SESSION['username']];
+        // Jika akun yang sedang login di-rename, pindahkan sesi aktif ke username baru.
+        if (isset($renameMap[$_SESSION['username']])) {
+            $oldUsername = $_SESSION['username'];
+            $_SESSION['username'] = $renameMap[$oldUsername];
+            $stmt = $pdo->prepare("INSERT INTO user_session_devices (username, session_hash, last_seen)
+                                   VALUES (?, ?, CURRENT_TIMESTAMP)
+                                   ON DUPLICATE KEY UPDATE last_seen = CURRENT_TIMESTAMP");
+            $stmt->execute([$_SESSION['username'], currentSessionHash()]);
+        }
 
         $users = array_map('publicUser', $pdo->query("SELECT * FROM users ORDER BY created_at ASC, username ASC")->fetchAll());
         respond(["status" => "success", "users" => $users, "user" => publicUser(loadUserRow($pdo, $_SESSION['username']))]);
@@ -904,6 +944,19 @@ switch ($action) {
         $resp = ["status" => "success", "message" => $msg];
         if (isset($newId)) $resp['id'] = $newId;
         respond($resp);
+        break;
+
+    // ---------------- TRANSAKSI ----------------
+    case 'clear_transactions':
+        if (!isSuper($currentUser)) fail("Akses ditolak. Role Super Admin diperlukan.", 403);
+        $pdo->beginTransaction();
+        ensureStateMetaRow($pdo, 'transactions');
+        $stmt = $pdo->prepare("SELECT revision FROM wms_state_meta WHERE state_key = ? FOR UPDATE");
+        $stmt->execute(['transactions']);
+        $newRevision = (int)$stmt->fetchColumn() + 1;
+        stateWriteRaw($pdo, 'transactions', '[]', $currentUser['username'], $newRevision);
+        $pdo->commit();
+        respond(["status" => "success", "revision" => $newRevision]);
         break;
 
     // ---------------- TRANSAKSI (baca) ----------------

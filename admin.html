@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WMS Adiboga - Admin Panel</title>
     <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-    <link rel="stylesheet" href="style.css?v=20261113">
+    <link rel="stylesheet" href="style.css?v=20261115">
     <link rel="stylesheet" href="admin.css?v=20261112">
 </head>
 <body class="admin-layout">
@@ -175,6 +175,7 @@
                   <th>Username</th>
                   <th>Role</th>
                   <th>Hak Akses (CRUD)</th>
+                  <th>Akses Bersamaan</th>
                   <th>Akses Menu & Gudang</th>
                   <th class="text-center">Aksi</th>
                 </tr>
@@ -220,14 +221,14 @@
           </div>
 
           <!-- FITUR PERMANEN: STATUS CUSTOM BACKDATE SELURUH TRANSAKSI -->
-          <div style="background: #f8fafc; padding: 12px 15px; border-radius: 6px; border: 1px solid #cbd5e1; margin-bottom: 15px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
-            <div>
+          <div class="system-setting-row">
+            <div class="system-setting-copy">
               <b style="font-size:14px; color:#1e293b;">Fitur Custom Backdate (Seluruh Transaksi):</b>
               <div style="font-size:12px; color:#64748b;">Pengaturan sistem untuk mengizinkan atau menolak pengisian tanggal mundur (backdate) pada semua transaksi (Manufaktur, Transfer, Penerimaan, Pengeluaran).</div>
             </div>
-            <div>
+            <div class="system-setting-action">
               <button id="btnToggleAllowBackdate" class="btn-primary system-toggle-button" onclick="toggleAllowBackdate()">
-                Status Custom Backdate: NON-AKTIF (Di-Blok)
+                NON-AKTIF · Backdate diblokir
               </button>
             </div>
           </div>
@@ -456,7 +457,6 @@
             </table>
           </div>
           <div class="master-product-actions">
-            <button type="button" class="btn-secondary" onclick="openModalSetSku()">+ Tambah Set SKU</button>
             <button type="button" class="btn-secondary" onclick="openModalSkuBarcodeRules()">Master Prefix SKU</button>
             <button type="button" class="btn-secondary" onclick="openModalMasterBOM()">Master BOM</button>
             <button type="button" class="btn-secondary" onclick="openModalMasterBundle()">Master SKU Bundle</button>
@@ -477,6 +477,43 @@
               <button id="btnPrevBarang" class="btn-secondary" onclick="changeMasterBarangPage(-1)">&laquo; Sebelumnya</button>
               <span id="indicatorBarangPage">Halaman 1 / 1</span>
               <button id="btnNextBarang" class="btn-secondary" onclick="changeMasterBarangPage(1)">Selanjutnya &raquo;</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:10px;">
+            <div>
+              <h2>Master Barcode</h2>
+              <p class="modal-hint">Barcode untuk produk, lokasi gudang, dan sublokasi yang memiliki EAN. EAN 12 digit akan dilengkapi check digit.</p>
+            </div>
+            <div class="master-barcode-actions">
+              <button type="button" class="btn-info" data-feature="pdf" onclick="printMasterBarcodePdf()">Cetak / PDF</button>
+            </div>
+          </div>
+          <div class="master-data-filter-bar">
+            <input id="searchMasterBarcode" type="search" placeholder="Cari SKU, nama, atau EAN..." oninput="renderMasterBarcodeTabel(1)">
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>No</th><th>Jenis</th><th>SKU / Kode</th><th>Nama</th><th>EAN</th><th>Barcode</th></tr></thead>
+              <tbody id="tabelMasterBarcode"></tbody>
+            </table>
+          </div>
+          <div class="pagination-bar">
+            <div class="pagination-info-group">
+              <label style="font-size:13px; margin:0;">Per halaman:</label>
+              <select id="pageSizeMasterBarcode" style="width:auto; padding:4px;" onchange="renderMasterBarcodeTabel(1)">
+                <option value="10" selected>10</option>
+                <option value="25">25</option>
+                <option value="50">50</option>
+              </select>
+              <span id="infoMasterBarcodePage">Menampilkan 0 - 0 dari 0 data</span>
+            </div>
+            <div class="pagination-controls">
+              <button id="btnPrevMasterBarcode" class="btn-secondary" onclick="changeMasterBarcodePage(-1)">&laquo; Sebelumnya</button>
+              <span id="indicatorMasterBarcodePage">Halaman 1 / 1</span>
+              <button id="btnNextMasterBarcode" class="btn-secondary" onclick="changeMasterBarcodePage(1)">Selanjutnya &raquo;</button>
             </div>
           </div>
         </div>
@@ -620,7 +657,7 @@
           <div class="production-scan-bar">
             <label for="productionBarcodeScan">Scan Barcode Produksi / Batch</label>
             <input id="productionBarcodeScan" type="text" placeholder="Contoh: OMD2242610153P" autocomplete="off" onkeydown="handleProductionBarcodeEnter(event)">
-            <small>Scan barcode produksi sesuai Master Prefix SKU atau format lama SKU + qty + tanggal YYMMDD + batch + shift. Hasil scan mengisi form; transaksi disimpan setelah Anda menekan Simpan.</small>
+            <small>Scan barcode sesuai Master Prefix SKU (batch 1 digit dan shift P/M bila diatur) atau format SKU + qty + tanggal YYMMDD dengan batch + shift. Hasil scan mengisi form; transaksi disimpan setelah Anda menekan Simpan.</small>
           </div>
 
           <div style="background:#f8fafc; padding:15px; border-radius:6px; margin-bottom:15px; border:1px solid #e2e8f0;">
@@ -910,7 +947,10 @@
       <div id="cekStokView" class="tab-page hidden">
         <div class="card cek-card">
           <div class="cek-head">
-            <h2>Cek Stok &amp; Lokasi</h2>
+            <div class="cek-head-top">
+              <h2>Cek Stok &amp; Lokasi</h2>
+              <button type="button" class="btn-primary" data-feature="custom_barcode" onclick="openModalCustomBarcode()">+ Buat Barcode Custom</button>
+            </div>
             <p>Scan EAN-13 / SKU barang untuk melihat sebaran stok per gudang, atau scan barcode / nama lokasi gudang untuk melihat isi lokasi tersebut.</p>
           </div>
           <div id="cekPendingBanner" class="cek-pending-banner" style="display:none;"></div>
@@ -925,8 +965,8 @@
             <div class="cek-result-head">
               <h3 id="cekEanJudul">Hasil Pencarian</h3>
               <div class="cek-result-actions">
-                <button id="btnExportCekPdf" data-feature="pdf" class="btn-info" onclick="exportCekStokPdf()">Export PDF</button>
-                <button id="btnCekTransferMain" data-feature="transfer_send,transfer_receive" class="btn-success" style="display:none;" onclick="bukaModalCekTransfer(cekState.sku, '')">Transfer / Keluar / Terima</button>
+                <button id="btnExportCekPdf" data-feature="pdf" class="btn-info" onclick="exportCekStokPdf()">Cetak PDF</button>
+                <button id="btnCekTransferMain" data-feature="transfer_send,transfer_receive,outbound_input" class="btn-success" style="display:none;" onclick="bukaPilihanAksiScan(findMasterBarang(cekState.sku))">Scan / Transaksi</button>
               </div>
             </div>
             <div id="cekEanDetailContent"></div>
@@ -1092,6 +1132,9 @@
               <label><input type="checkbox" class="user-feature-access" value="pda_retur" checked> PDA Retur</label>
               <label><input type="checkbox" class="user-feature-access" value="transfer_send" checked> Kirim Transfer</label>
               <label><input type="checkbox" class="user-feature-access" value="transfer_receive" checked> Terima Transfer</label>
+              <label><input type="checkbox" class="user-feature-access" value="outbound_input" checked> Input Barang Keluar</label>
+              <label><input type="checkbox" class="user-feature-access" value="custom_barcode"> Cetak Barcode Custom</label>
+              <label><input type="checkbox" class="user-feature-access" value="allow_multiple_sessions"> Akun dapat diakses banyak user/perangkat bersamaan</label>
             </div>
 
             <label style="margin-bottom:8px; display:block; font-weight:bold;">2. Akses Menu Utama System:</label>
@@ -1130,7 +1173,8 @@
           </div>
           <div style="margin-bottom:15px;">
             <label>Barcode Gudang (EAN-13 Code)</label>
-            <input type="text" id="mgEanGudang" placeholder="8993883600001">
+            <input type="text" id="mgEanGudang" placeholder="Kosongkan untuk generate otomatis" maxlength="13" inputmode="numeric">
+            <small class="modal-hint">Kosongkan untuk membuat EAN-13 gudang secara otomatis.</small>
           </div>
           <div style="display:flex; justify-content:flex-end; gap:10px;">
             <button type="button" class="btn-danger" onclick="closeModalTambahGudang()">Batal</button>
@@ -1276,7 +1320,7 @@
     </div>
 
     <div id="modalSkuBarcodeRules" class="modal-overlay">
-      <div class="modal-card" style="max-width:820px;">
+      <div class="modal-card sku-prefix-modal">
         <div class="modal-section-head">
           <div><h2>Master Prefix SKU</h2><p class="modal-hint">Atur potongan barcode untuk SKU, jumlah, dan tanggal produksi. Contoh: FG00124261015 → FG-001, 24, 2026-10-15.</p></div>
           <button type="button" class="btn-danger" onclick="closeModalSkuBarcodeRules()">Tutup</button>
@@ -1284,8 +1328,8 @@
         <form onsubmit="simpanSkuBarcodeRule(event)">
           <input type="hidden" id="skuBarcodeRuleEditIndex" value="">
           <div class="form-row">
-            <div><label for="skuBarcodePrefix">Prefix barcode SKU</label><input id="skuBarcodePrefix" type="text" placeholder="FG001" required oninput="document.getElementById('skuBarcodeSkuLength').value=this.value.length; updateSkuBarcodeRulePreview()"></div>
-            <div><label for="skuBarcodeProduct">Alias SKU di Master Barang</label><select id="skuBarcodeProduct" required onchange="updateSkuBarcodeRulePreview()"></select></div>
+            <div><label for="skuBarcodePrefix">Prefix barcode SKU (otomatis)</label><input id="skuBarcodePrefix" type="text" placeholder="Otomatis dari SKU" required readonly></div>
+            <div><label for="skuBarcodeProduct">Alias SKU di Master Barang</label><select id="skuBarcodeProduct" required onchange="handleSkuBarcodeProductChange()"></select></div>
           </div>
           <div class="form-row">
             <div><label>Range SKU (posisi awal / panjang)</label><div class="form-row"><input id="skuBarcodeSkuStart" type="number" min="1" value="1" aria-label="Posisi awal SKU" oninput="updateSkuBarcodeRulePreview()"><input id="skuBarcodeSkuLength" type="number" min="1" value="5" aria-label="Panjang SKU" oninput="updateSkuBarcodeRulePreview()"></div></div>
@@ -1295,13 +1339,58 @@
             <div><label>Range tanggal produksi (posisi awal / panjang)</label><div class="form-row"><input id="skuBarcodeDateStart" type="number" min="1" value="8" aria-label="Posisi awal tanggal produksi" oninput="updateSkuBarcodeRulePreview()"><input id="skuBarcodeDateLength" type="number" min="1" value="6" aria-label="Panjang tanggal produksi" oninput="updateSkuBarcodeRulePreview()"></div></div>
             <div id="skuBarcodeRulePreview" class="modal-hint" style="align-self:center;"></div>
           </div>
+          <div class="form-row">
+            <div><label for="skuBarcodeBatchStart">Posisi awal batch (opsional, 1 digit)</label><input id="skuBarcodeBatchStart" type="number" min="1" placeholder="Kosongkan jika tanpa batch" oninput="updateSkuBarcodeRulePreview()"></div>
+            <div><label for="skuBarcodeShiftStart">Posisi awal shift (opsional, P/M)</label><input id="skuBarcodeShiftStart" type="number" min="1" placeholder="Kosongkan jika tanpa shift" oninput="updateSkuBarcodeRulePreview()"></div>
+          </div>
           <div class="modal-actions">
             <button type="button" class="btn-danger" onclick="resetSkuBarcodeRuleForm()">Batal</button>
             <button type="submit" class="btn-success" id="btnSaveSkuBarcodeRule">+ Tambah Aturan</button>
           </div>
         </form>
-        <div class="table-wrap">
-          <table><thead><tr><th>Prefix</th><th>SKU / Nama</th><th>Range SKU</th><th>Range Jumlah</th><th>Range Tanggal</th><th class="text-center">Aksi</th></tr></thead><tbody id="tabelSkuBarcodeRules"></tbody></table>
+        <div class="sku-prefix-list-toolbar">
+          <label for="searchSkuBarcodeRules">Cari prefix, SKU, atau nama barang</label>
+          <input id="searchSkuBarcodeRules" type="search" placeholder="Ketik prefix, SKU, atau nama barang..." oninput="renderSkuBarcodeRules(1)">
+        </div>
+        <div class="table-wrap sku-prefix-table-wrap">
+          <table><thead><tr><th>Prefix</th><th>Alias SKU / Nama</th><th>Range SKU</th><th>Range Qty</th><th>Range Tanggal</th><th>Batch</th><th>Shift</th><th class="text-center">Aksi</th></tr></thead><tbody id="tabelSkuBarcodeRules"></tbody></table>
+        </div>
+        <div class="pagination-bar sku-prefix-pagination">
+          <div class="pagination-info-group">
+            <label for="pageSizeSkuBarcodeRules">Per halaman:</label>
+            <select id="pageSizeSkuBarcodeRules" onchange="renderSkuBarcodeRules(1)">
+              <option value="5">5</option><option value="10" selected>10</option><option value="25">25</option>
+            </select>
+            <span id="infoSkuBarcodeRules">Menampilkan 0 - 0 dari 0 data</span>
+          </div>
+          <div class="pagination-controls">
+            <button id="btnPrevSkuBarcodeRules" type="button" class="btn-secondary" onclick="changeSkuBarcodeRulesPage(-1)">&laquo; Sebelumnya</button>
+            <span id="indicatorSkuBarcodeRules">Halaman 1 / 1</span>
+            <button id="btnNextSkuBarcodeRules" type="button" class="btn-secondary" onclick="changeSkuBarcodeRulesPage(1)">Selanjutnya &raquo;</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="modalCustomBarcode" class="modal-overlay">
+      <div class="modal-card" style="max-width:820px;">
+        <div class="modal-section-head">
+          <div><h2>Buat Barcode Custom untuk Tujuan Keluar</h2><p class="modal-hint">Barcode ini hanya dibuat sementara untuk dicetak dan tidak disimpan ke Master Prefix atau Master Barcode.</p></div>
+          <button type="button" class="btn-danger" onclick="closeModalCustomBarcode()">Tutup</button>
+        </div>
+        <div class="form-row">
+          <div><label for="customBarcodeProduct">Alias SKU</label><select id="customBarcodeProduct" onchange="handleCustomBarcodeProductChange()"></select></div>
+          <div><label for="customBarcodeLabel">Nama label / tujuan keluar</label><input id="customBarcodeLabel" type="text" placeholder="Contoh: Tujuan Keluar" oninput="handleCustomBarcodeLabelChange()"></div>
+        </div>
+        <div class="sku-barcode-custom-head">
+          <div><b>Komponen barcode custom</b><small>Nilai hanya berlaku untuk cetakan saat ini.</small></div>
+          <button type="button" class="btn-secondary" onclick="addCustomBarcodeRange()">+ Tambah Range</button>
+        </div>
+        <div id="customBarcodeRanges" class="sku-barcode-custom-ranges"></div>
+        <div id="customBarcodePreview" class="sku-barcode-custom-preview"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn-danger" onclick="closeModalCustomBarcode()">Batal</button>
+          <button type="button" class="btn-info" data-feature="custom_barcode" onclick="printCustomBarcodePdf()">Cetak Barcode / PDF</button>
         </div>
       </div>
     </div>
@@ -1579,21 +1668,68 @@
       </div>
     </div>
 
-    <!-- MODAL CEK STOK: TRANSFER / KELUAR / TERIMA -->
+    <!-- MODAL CEK STOK: SCAN TRANSAKSI -->
     <div id="modalCekScanAction" class="modal-overlay">
       <div class="modal-card cek-modal-card">
-        <h3>Mulai Transaksi dari Scan</h3>
-        <p id="cekScanFirstSkuInfo" class="modal-hint"></p>
-        <div class="form-row">
-          <div><label for="cekScanActionType">Tipe Transaksi</label><select id="cekScanActionType" onchange="toggleCekScanActionFields()"><option value="MASUK">Terima Barang</option><option value="TRANSFER">Transfer</option><option value="KELUAR">Kirim Barang</option></select></div>
-          <div><label for="cekScanWarehouse">Gudang</label><select id="cekScanWarehouse" onchange="renderSubLocationPicker('cekScanSubLokasi', this.value)"></select></div>
-          <div><label for="cekScanSubLokasi">Sub Lokasi (Opsional)</label><select id="cekScanSubLokasi"></select></div>
-          <div id="cekScanDestinationWrap" style="display:none;"><label for="cekScanDestination">Gudang Tujuan</label><select id="cekScanDestination" onchange="renderSubLocationPicker('cekScanDestinationSubLokasi', this.value); toggleCekScanActionFields()"></select></div>
-          <div id="cekScanDestinationSubLocationWrap" style="display:none;"><label for="cekScanDestinationSubLokasi">Sub Lokasi Tujuan</label><select id="cekScanDestinationSubLokasi"></select></div>
+        <div id="cekScanSetupPanel">
+          <h3 id="cekScanActionTitle">Mulai Transaksi dari Scan</h3>
+          <p id="cekScanFirstSkuInfo" class="modal-hint"></p>
+          <div class="cek-scan-setup-grid">
+            <div><label id="cekScanActionTypeLabel" for="cekScanActionType">Tipe Transaksi</label><select id="cekScanActionType" onchange="toggleCekScanActionFields()"><option value="MASUK">Terima Barang</option><option value="TRANSFER">Transfer</option><option value="KELUAR">Kirim Barang</option></select></div>
+            <div><label id="cekScanWarehouseLabel" for="cekScanWarehouse">Gudang</label><select id="cekScanWarehouse" onchange="renderSubLocationPicker('cekScanSubLokasi', this.value)"></select></div>
+            <div><label for="cekScanSubLokasi">Sub Lokasi (Opsional)</label><select id="cekScanSubLokasi"></select></div>
+            <div id="cekScanDestinationWrap" style="display:none;"><label for="cekScanDestination">Gudang Tujuan</label><select id="cekScanDestination" onchange="renderSubLocationPicker('cekScanDestinationSubLokasi', this.value); toggleCekScanActionFields()"></select></div>
+            <div id="cekScanDestinationSubLocationWrap" style="display:none;"><label for="cekScanDestinationSubLokasi">Sub Lokasi Tujuan</label><select id="cekScanDestinationSubLokasi"></select></div>
+          </div>
+          <div id="cekScanProductionDetails" class="cek-production-scan-details" style="display:none;">
+            <div>
+              <label for="cekScanProductionQty">Qty dari Barcode</label>
+              <input id="cekScanProductionQty" type="number" min="1" step="1">
+            </div>
+            <div>
+              <label>Tanggal Produksi</label>
+              <div id="cekScanProductionDate" class="cek-production-date">-</div>
+            </div>
+            <p id="cekScanProductionVerifyNote" class="modal-hint"></p>
+          </div>
+          <div class="cek-scan-photo">
+            <label for="cekScanPhotoInput">Upload Foto Bukti (Opsional)</label>
+            <input id="cekScanPhotoInput" type="file" accept="image/*" onchange="previewCekScanPhoto(this)">
+            <div id="cekScanPhotoPreviewWrap" class="cek-foto-wrap" style="display:none;">
+              <img id="cekScanPhotoPreview" src="" alt="Preview foto bukti">
+            </div>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn-secondary" onclick="batalCekScanAction()">Batal</button>
+            <button type="button" class="btn-primary" onclick="mulaiCekScanAction()">Mulai Scan</button>
+          </div>
         </div>
-        <div class="modal-actions">
-          <button type="button" class="btn-secondary" onclick="batalCekScanAction()">Batal</button>
-          <button type="button" class="btn-primary" onclick="mulaiCekScanAction()">Mulai Scan</button>
+        <div id="cekScanActivePanel" class="cek-scan-active-panel" style="display:none;">
+          <div class="cek-scan-active-header">
+            <div>
+              <h3 id="cekScanActiveTitle">Scan Transaksi</h3>
+              <p id="cekScanActiveSummary"></p>
+            </div>
+            <button type="button" class="btn-secondary" onclick="bukaRingkasanCekScan()">Lihat Item</button>
+          </div>
+          <div class="cek-scan-barcode-field">
+            <label for="cekScanBarcodeInput">Scan Barcode / SKU</label>
+            <input id="cekScanBarcodeInput" type="text" placeholder="Scan barcode barang lalu tekan Enter..." autocomplete="off" onkeydown="handleCekScanBarcodeEnter(event)">
+            <small id="cekScanLastMessage">Sesi scan aktif. Scan barcode untuk menambahkan barang.</small>
+          </div>
+          <div class="cek-scan-active-list">
+            <div class="cek-scan-active-list-head">Item Terscan <b id="cekScanActiveCount">0</b></div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>SKU</th><th>Nama</th><th>Kode Produksi</th><th>Qty</th></tr></thead>
+                <tbody id="cekScanActiveRows"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn-danger" onclick="batalCekScanSession()">Batalkan Sesi</button>
+            <button type="button" class="btn-success" onclick="selesaiCekScanSession()">Selesai &amp; Simpan</button>
+          </div>
         </div>
       </div>
     </div>
@@ -1601,7 +1737,7 @@
       <div class="modal-card cek-modal-card">
         <h3>Transaksi Scan Berjalan</h3>
         <p id="cekScanSessionInfo" class="modal-hint"></p>
-        <div class="table-wrap"><table><thead><tr><th>SKU</th><th>Nama</th><th>Qty Scan</th><th>UoM</th></tr></thead><tbody id="cekScanSessionRows"></tbody></table></div>
+        <div class="table-wrap"><table><thead><tr><th>SKU</th><th>Nama</th><th>Tanggal Produksi</th><th>Qty</th><th>UoM</th></tr></thead><tbody id="cekScanSessionRows"></tbody></table></div>
         <p class="modal-hint">Lanjutkan scan SKU atau tekan Selesai untuk menyimpan semua item.</p>
         <div class="modal-actions">
           <button type="button" class="btn-danger" onclick="batalCekScanSession()">Batalkan Sesi</button>
@@ -1704,7 +1840,7 @@
         <form onsubmit="simpanEditMasterGudang(event)">
           <input type="hidden" id="editGudangIndex">
           <div style="margin-bottom: 12px;"><label>Nama Lokasi / Gudang</label><input type="text" id="editGudangNama" required></div>
-          <div style="margin-bottom: 15px;"><label>Barcode Gudang (EAN-13 Code)</label><input type="text" id="editGudangEan" placeholder="8993883600001"></div>
+          <div style="margin-bottom: 15px;"><label>Barcode Gudang (EAN-13 Code)</label><input type="text" id="editGudangEan" placeholder="Kosongkan untuk generate otomatis" maxlength="13" inputmode="numeric"><small class="modal-hint">Kosongkan untuk membuat EAN-13 gudang secara otomatis.</small></div>
           <div style="display:flex; justify-content:flex-end; gap:10px;">
             <button type="button" class="btn-danger" onclick="closeModalEditGudang()">Batal</button>
             <button type="submit" class="btn-primary">Simpan Perubahan</button>
@@ -1770,6 +1906,9 @@
               <label><input type="checkbox" class="edit-user-feature-access" value="pda_retur"> PDA Retur</label>
               <label><input type="checkbox" class="edit-user-feature-access" value="transfer_send"> Kirim Transfer</label>
               <label><input type="checkbox" class="edit-user-feature-access" value="transfer_receive"> Terima Transfer</label>
+              <label><input type="checkbox" class="edit-user-feature-access" value="outbound_input"> Input Barang Keluar</label>
+              <label><input type="checkbox" class="edit-user-feature-access" value="custom_barcode"> Cetak Barcode Custom</label>
+              <label><input type="checkbox" class="edit-user-feature-access" value="allow_multiple_sessions"> Akun dapat diakses banyak user/perangkat bersamaan</label>
             </div>
             <label style="font-weight:bold; display:block; margin-bottom:6px;">Menu:</label>
             <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:10px;" id="editUserMenuAccessBox">
@@ -1823,7 +1962,7 @@
 
   </div>
 
-  <script src="script.js?v=20261110c"></script>
+  <script src="script.js?v=20261115"></script>
 
   <footer>
   <p>Testing Version 1.0</p>
