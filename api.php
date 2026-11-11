@@ -723,6 +723,17 @@ switch ($action) {
         break;
 
     // ---------------- STATE (SELURUH DATA APLIKASI) ----------------
+    case 'get_revisions':
+        $revisions = [];
+        $rows = $pdo->query("SELECT state_key, revision, initialized FROM wms_state_meta")->fetchAll();
+        foreach ($rows as $row) {
+            $key = $row['state_key'];
+            if (!(int)$row['initialized'] || !array_key_exists($key, STATE_KEYS)) continue;
+            $revisions[$key] = (int)$row['revision'];
+        }
+        respond(["status" => "success", "revisions" => $revisions]);
+        break;
+
     case 'get_state':
         $state = [];
         $revisions = [];

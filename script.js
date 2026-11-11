@@ -66,6 +66,8 @@ let serverRevisions = {};   // revision terakhir yang diketahui per key
 let serverSnapshot = {};    // JSON terakhir yang sudah tersinkron per key
 let syncChain = Promise.resolve();
 let isReloadingFromServer = false;
+let statePollTimer = null;
+let isPollingServerState = false;
 
 async function apiCall(action, payload = null) {
   let res;
@@ -162,6 +164,66 @@ async function reloadFromServer() {
   }
 }
 
+function refreshViewsAfterServerUpdate(changedKeys) {
+  const changed = new Set(changedKeys);
+  const masterKeys = [
+    'masterBarang', 'bundleMapping', 'warehouses', 'uomList', 'kategoriProduk',
+    'kategoriMasukOptions', 'tujuanKeluarOptions', 'masterBOM', 'skuBarcodeRules'
+  ];
+  if (masterKeys.some(key => changed.has(key))) {
+    renderMasterDropdowns();
+    renderMasterGudangTabel(pageGudang);
+    renderMasterBarangTabel(pageBarang);
+    renderBarangDropdownOptions();
+    renderMasterBOMTabel(pageBOM);
+    renderBundleMappingTabel(pageBundle);
+    renderMasterKategoriTabel(pageKategori);
+    renderMasterUomTabel(pageUom);
+  }
+  if (changed.has('transactions') || changed.has('stockOpnameData')) {
+    renderDashboard(currentPage);
+    renderLaporanStok(pageLaporanStok);
+  }
+  if (changed.has('returRecords')) renderTabelRetur(pageRetur);
+  if (changed.has('pendingTransfers')) {
+    renderTransferApproval(pageTransfer);
+    renderCekPendingBanner();
+    syncTransferApprovalPanel();
+  }
+  if (changed.has('awbPrefixRules')) renderTabelPrefixAWB();
+}
+
+async function pollServerRevisions() {
+  if (!currentUser || document.hidden || isReloadingFromServer || isPollingServerState) return;
+  isPollingServerState = true;
+  try {
+    const syncAtStart = syncChain;
+    await syncAtStart;
+    if (!currentUser) return;
+    const response = await apiCall('get_revisions');
+    if (!response.ok || response.body.status !== 'success') return;
+    const revisions = response.body.revisions || {};
+    const changedKeys = Object.keys(revisions).filter(key =>
+      serverRevisions[key] !== revisions[key]
+    );
+    if (!changedKeys.length) return;
+    const hasLocalChanges = SYNC_KEYS.some(key => {
+      if (SYNC_KEYS_SUPER_ONLY.includes(key) && currentUser.role !== 'superadmin') return false;
+      return serverSnapshot[key] !== JSON.stringify(appState[key]);
+    });
+    if (syncChain !== syncAtStart || hasLocalChanges) return;
+
+    isReloadingFromServer = true;
+    const result = await loadServerState();
+    if (result.ok && result.body.status === 'success') {
+      refreshViewsAfterServerUpdate(changedKeys);
+    }
+  } finally {
+    isReloadingFromServer = false;
+    isPollingServerState = false;
+  }
+}
+
 // Manajemen Akun hanya untuk Superadmin (server juga menolak role lain)
 function requireSuperadminAccount() {
   if (currentUser && currentUser.role === 'superadmin') return true;
@@ -239,6 +301,10 @@ function showLogin() {
   if (sessionHeartbeatTimer) {
     clearInterval(sessionHeartbeatTimer);
     sessionHeartbeatTimer = null;
+  }
+  if (statePollTimer) {
+    clearInterval(statePollTimer);
+    statePollTimer = null;
   }
   document.getElementById('loginContainer').style.display = 'flex';
   document.getElementById('appContainer').style.display = 'none';
@@ -553,6 +619,7 @@ let appState = buildDefaultAppState();
 // Normalisasi data setelah dimuat dari server / hasil impor
 function normalizeAppState() {
   appState.warehouses = sanitizeWarehouses(appState.warehouses);
+  ensureProductBarcodes();
   ensureWarehouseBarcodes();
   ensureSubLocationBarcodes();
   appState.bundleMapping = sanitizeBundleMapping(appState.bundleMapping);
@@ -661,6 +728,8 @@ async function finishLoginSync() {
     );
     if (pending.length === 0) clearLegacyLocalStorage();
   }
+  if (statePollTimer) clearInterval(statePollTimer);
+  statePollTimer = setInterval(pollServerRevisions, 5000);
 }
 
 appState.masterBarang.forEach(b => { if (!b.uom) b.uom = 'PCS'; });
@@ -684,7 +753,7 @@ let currentUploadedBase64Image = "";
 
 function saveData() {
   // Sumber data utama = database (api.php). Tidak ada cache localStorage lagi.
-  pushStateToServer();
+  return pushStateToServer();
 }
 
 function findMasterBarang(skuOrBarcode) {
@@ -1486,9 +1555,10 @@ function isValidEan13(value) {
   return /^\d{13}$/.test(code) && ean13CheckDigit(code.slice(0, 12)) === code[12];
 }
 
-function getUsedEanCodes(excludedWarehouseIndex = -1) {
+function getUsedEanCodes(excludedWarehouseIndex = -1, excludedProductSku = '') {
   const used = new Set();
   appState.masterBarang.forEach(product => {
+    if (product.sku === excludedProductSku) return;
     const ean = normalizeEan13(product.barcode);
     if (ean) used.add(ean);
   });
@@ -1503,21 +1573,46 @@ function getUsedEanCodes(excludedWarehouseIndex = -1) {
   return used;
 }
 
-function generateWarehouseEan(usedCodes = getUsedEanCodes()) {
-  const prefix = '899388360';
-  for (let sequence = 0; sequence <= 999; sequence++) {
-    const body = `${prefix}${String(sequence).padStart(3, '0')}`;
+function generateUniqueEan(usedCodes = getUsedEanCodes()) {
+  const prefix = '89938836';
+  for (let sequence = 0; sequence <= 9999; sequence++) {
+    const body = `${prefix}${String(sequence).padStart(4, '0')}`;
     const ean = `${body}${ean13CheckDigit(body)}`;
     if (!usedCodes.has(ean)) return ean;
   }
-  alert('Nomor EAN gudang sudah habis. Hubungi administrator untuk menentukan prefix barcode lain.');
+  alert('Nomor EAN sudah habis. Hubungi administrator untuk menentukan prefix barcode lain.');
   return '';
+}
+
+function prepareProductEan(rawValue, excludedProductSku = '') {
+  const digits = String(rawValue || '').trim().replace(/\s/g, '');
+  const usedCodes = getUsedEanCodes(-1, excludedProductSku);
+  if (!digits || digits === '-') return generateUniqueEan(usedCodes);
+  const normalized = normalizeEan13(digits);
+  if (!normalized) {
+    alert('EAN barang harus berupa 12 digit (check digit dibuat otomatis) atau 13 digit EAN-13 yang valid.');
+    return '';
+  }
+  if (usedCodes.has(normalized)) {
+    alert('EAN tersebut sudah digunakan oleh barang, gudang, atau sub lokasi lain.');
+    return '';
+  }
+  return normalized;
+}
+
+function ensureProductBarcodes() {
+  appState.masterBarang.forEach(product => {
+    const barcode = String(product.barcode || '').trim();
+    if (barcode && barcode !== '-') return;
+    const ean = generateUniqueEan();
+    if (ean) product.barcode = ean;
+  });
 }
 
 function prepareWarehouseEan(rawValue, excludedWarehouseIndex = -1) {
   const digits = String(rawValue || '').trim().replace(/\s/g, '');
   const usedCodes = getUsedEanCodes(excludedWarehouseIndex);
-  if (!digits) return generateWarehouseEan(usedCodes);
+  if (!digits) return generateUniqueEan(usedCodes);
   const normalized = normalizeEan13(digits);
   if (!normalized) {
     alert('EAN gudang harus berupa 12 digit (check digit dibuat otomatis) atau 13 digit EAN-13 yang valid.');
@@ -1548,7 +1643,7 @@ function ensureWarehouseBarcodes() {
       ? `${digits.slice(0, 12)}${ean13CheckDigit(digits.slice(0, 12))}`
       : normalizeEan13(digits);
     let ean = repaired && !used.has(repaired) ? repaired : '';
-    if (!ean) ean = generateWarehouseEan(used);
+    if (!ean) ean = generateUniqueEan(used);
     if (ean) {
       warehouse.ean = ean;
       used.add(ean);
@@ -2339,9 +2434,11 @@ function tambahMasterBarang(e) {
   e.preventDefault();
   const sku = document.getElementById("mbSKU").value.trim();
   const nama = document.getElementById("mbNama").value.trim();
-  const barcode = document.getElementById("mbBarcode").value.trim() || "-";
+  const barcode = prepareProductEan(document.getElementById("mbBarcode").value);
   const kat = document.getElementById("mbKategoriProduk").value;
   const uom = document.getElementById("mbUom").value || 'PCS';
+
+  if (!barcode) return;
 
   if (appState.masterBarang.some(b => b.sku.toLowerCase() === sku.toLowerCase())) {
     return alert("Kode SKU sudah terdaftar!");
@@ -2620,6 +2717,7 @@ function openModalCustomBarcode() {
       `<option value="${cekEsc(product.sku)}">${cekEsc(product.sku)} - ${cekEsc(product.nama)}</option>`
     ).join('');
   document.getElementById('customBarcodeLabel').value = '';
+  document.getElementById('customBarcodeBatchInput').value = '';
   renderCustomBarcodeRanges([{ start: 1, length: 0, value: '' }]);
   productSelect.value = '';
   document.getElementById('modalCustomBarcode').style.display = 'flex';
@@ -2630,6 +2728,7 @@ function closeModalCustomBarcode() {
   document.getElementById('modalCustomBarcode').style.display = 'none';
   document.getElementById('customBarcodeProduct').value = '';
   document.getElementById('customBarcodeLabel').value = '';
+  document.getElementById('customBarcodeBatchInput').value = '';
   document.getElementById('customBarcodeRanges').innerHTML = '';
   document.getElementById('customBarcodePreview').textContent = '';
 }
@@ -2730,8 +2829,20 @@ function removeCustomBarcodeRange(index) {
 function updateCustomBarcodePreview() {
   const preview = document.getElementById('customBarcodePreview');
   if (!preview) return;
+  const batch = getCustomBarcodeBatch();
+  if (batch.length) {
+    preview.innerHTML = `Preview (${batch.length} barcode): ${batch.map(barcode => `<code>${cekEsc(barcode)}</code>`).join('<br>')}`;
+    return;
+  }
   const barcode = getCustomBarcodeRanges().slice().sort((a, b) => a.start - b.start).map(range => range.value).join('');
   preview.innerHTML = `Preview: <code>${cekEsc(barcode || '—')}</code>`;
+}
+
+function getCustomBarcodeBatch() {
+  return String(document.getElementById('customBarcodeBatchInput')?.value || '')
+    .split(/\r?\n/)
+    .map(value => value.trim().toUpperCase())
+    .filter(Boolean);
 }
 
 function printCustomBarcodePdf() {
@@ -2740,21 +2851,30 @@ function printCustomBarcodePdf() {
   const product = findMasterBarang(selectedSku);
   const label = document.getElementById('customBarcodeLabel').value.trim() || product?.nama || '';
   const ranges = getCustomBarcodeRanges().sort((a, b) => a.start - b.start);
-  const barcode = ranges.map(range => range.value).join('');
+  const batch = getCustomBarcodeBatch();
+  const barcodes = batch.length ? batch : [ranges.map(range => range.value).join('')];
   const rangesValid = ranges.length > 0 && ranges.every((range, index) =>
     Number.isInteger(range.start) && range.start > 0 &&
     Number.isInteger(range.length) && range.length > 0 &&
     range.value.length === range.length &&
     (index === 0 ? range.start === 1 : range.start === ranges[index - 1].start + ranges[index - 1].length)
   );
-  if ((selectedSku && !product) || (!product && !label) || !rangesValid || !generateCode39Svg(barcode)) {
-    return alert('Isi nama label/tujuan jika tanpa SKU dan pastikan setiap nilai barcode sesuai panjang range. Code 39 hanya mendukung huruf A-Z, angka, spasi, titik, dan karakter -.$/+%.');
+  if ((selectedSku && !product) || (!product && !label) ||
+      (!batch.length && !rangesValid) || barcodes.some(barcode => !generateCode39Svg(barcode))) {
+    return alert('Isi nama label/tujuan jika tanpa SKU dan pastikan semua barcode valid. Code 39 hanya mendukung huruf A-Z, angka, spasi, titik, dan karakter -.$/+%.');
   }
+  const labels = barcodes.map((barcode, index) => `
+    <article class="barcode-label">
+      <strong>${cekEsc(label)}</strong>
+      <small>Barcode Custom${product ? ` · ${cekEsc(product.sku)}` : ' · Tujuan Keluar'}${barcodes.length > 1 ? ` · ${index + 1}/${barcodes.length}` : ''}</small>
+      ${generateCode39Svg(barcode)}
+      <span>${cekEsc(barcode)}</span>
+    </article>`).join('');
   const printWindow = window.open('', '_blank');
   if (!printWindow) return alert('Pop-up diblokir browser. Izinkan pop-up untuk mencetak barcode custom.');
   printWindow.document.write(`<!doctype html><html lang="id"><head><meta charset="utf-8"><title>Barcode Tujuan Keluar</title>
-    <style>*{box-sizing:border-box}body{font:12px Arial,sans-serif;color:#111827;margin:12mm}.barcode-label{min-height:110px;border:1px solid #cbd5e1;padding:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;break-inside:avoid}.barcode-label strong{font-size:14px}.barcode-label small{margin:4px 0;color:#475569}.barcode-label span{font-size:12px;letter-spacing:1px}.custom-code39-barcode{max-width:100%;height:42px}@media print{body{margin:8mm}}</style>
-    </head><body><article class="barcode-label"><strong>${cekEsc(label)}</strong><small>Barcode Custom${product ? ` · ${cekEsc(product.sku)}` : ' · Tujuan Keluar'}</small>${generateCode39Svg(barcode)}<span>${cekEsc(barcode)}</span></article>
+    <style>*{box-sizing:border-box}body{font:12px Arial,sans-serif;color:#111827;margin:12mm}.barcode-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.barcode-label{min-height:110px;border:1px solid #cbd5e1;padding:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;break-inside:avoid}.barcode-label strong{font-size:14px}.barcode-label small{margin:4px 0;color:#475569}.barcode-label span{font-size:12px;letter-spacing:1px;overflow-wrap:anywhere}.custom-code39-barcode{max-width:100%;height:42px}@media print{body{margin:8mm}.barcode-grid{gap:5mm}}@media(max-width:600px){.barcode-grid{grid-template-columns:1fr}}</style>
+    </head><body><main class="barcode-grid">${labels}</main>
     <script>window.addEventListener('load',function(){setTimeout(function(){window.print()},150)})<\/script></body></html>`);
   printWindow.document.close();
 }
@@ -2792,17 +2912,14 @@ function simpanSetSku(event) {
   const quantity = parseLocalizedNumber(document.getElementById('setSkuJumlah').value);
   const sku = document.getElementById('setSkuKode').value.trim();
   const name = document.getElementById('setSkuNama').value.trim();
-  const barcode = document.getElementById('setSkuBarcode').value.trim() || '-';
+  const barcode = prepareProductEan(document.getElementById('setSkuBarcode').value);
   const uom = document.getElementById('setSkuUom').value || 'BOX';
+  if (!barcode) return;
   if (!component || !Number.isFinite(quantity) || quantity <= 0 || !sku || !name) {
     return alert('Pilih produk dan masukkan jumlah set yang valid (lebih dari 0).');
   }
   if (appState.masterBarang.some(product => product.sku.toLowerCase() === sku.toLowerCase())) {
     return alert(`SKU set "${sku}" sudah ada. Perbarui data lalu coba lagi.`);
-  }
-  if (!barcode || barcode === '-') return alert('EAN unik wajib diisi untuk setiap Set SKU.');
-  if (appState.masterBarang.some(product => String(product.barcode || '').toLowerCase() === barcode.toLowerCase())) {
-    return alert('EAN set sudah digunakan oleh produk lain.');
   }
   const setNumber = Number(sku.slice(sku.lastIndexOf('-') + 1));
   appState.masterBarang.push({
@@ -3101,9 +3218,11 @@ function simpanEditMasterBarang(e) {
   const oldSKU = document.getElementById("editMasterOldSKU").value;
   const newSKU = document.getElementById("editMasterSKU").value.trim();
   const newNama = document.getElementById("editMasterNama").value.trim();
-  const newBarcode = document.getElementById("editMasterBarcode").value.trim() || "-";
+  const newBarcode = prepareProductEan(document.getElementById("editMasterBarcode").value, oldSKU);
   const newKat = document.getElementById("editMasterKategori").value;
   const newUom = document.getElementById("editMasterUom").value;
+
+  if (!newBarcode) return;
 
   const item = appState.masterBarang.find(b => b.sku === oldSKU);
   if (item) {
@@ -3169,6 +3288,93 @@ function exportMasterBarangExcel() {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Master Barang");
   XLSX.writeFile(wb, `Master_Barang_${new Date().toISOString().split('T')[0]}.xlsx`);
+}
+
+function uploadMasterBarangExcel(event) {
+  if (!requireFeatureAccess('import', 'Import')) return;
+  if (!currentUser || currentUser.role !== 'superadmin') {
+    return alert('Import Master Barang hanya dapat dilakukan oleh Superadmin.');
+  }
+  const fileInput = event?.target || document.getElementById('importMasterBarangExcelFile');
+  const file = fileInput.files?.[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = async function(loadEvent) {
+    try {
+      const workbook = XLSX.read(new Uint8Array(loadEvent.target.result), { type: 'array' });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet);
+      if (!rows.length) return alert('File Excel kosong!');
+
+      const usedEans = getUsedEanCodes();
+      const existingSkus = new Set(appState.masterBarang.map(product => String(product.sku).toLowerCase()));
+      let added = 0;
+      let skipped = 0;
+      const issues = [];
+
+      rows.forEach((row, index) => {
+        const rowNumber = index + 2;
+        const sku = String(row['Kode SKU'] || row.SKU || row.sku || '').trim();
+        const name = String(row['Nama Barang'] || row.Nama || row.nama || '').trim();
+        if (!sku || !name) {
+          skipped++;
+          issues.push(`baris ${rowNumber}: SKU atau nama kosong`);
+          return;
+        }
+        if (existingSkus.has(sku.toLowerCase())) {
+          skipped++;
+          issues.push(`baris ${rowNumber}: SKU ${sku} sudah terdaftar`);
+          return;
+        }
+
+        const rawEan = String(row.Barcode || row.barcode || row.EAN || row.ean || '').trim();
+        let barcode = '';
+        if (!rawEan || rawEan === '-') {
+          barcode = generateUniqueEan(usedEans);
+        } else {
+          barcode = normalizeEan13(rawEan);
+          if (!barcode) {
+            skipped++;
+            issues.push(`baris ${rowNumber}: EAN tidak valid`);
+            return;
+          }
+          if (usedEans.has(barcode)) {
+            skipped++;
+            issues.push(`baris ${rowNumber}: EAN ${barcode} sudah digunakan`);
+            return;
+          }
+        }
+        if (!barcode) {
+          skipped++;
+          issues.push(`baris ${rowNumber}: EAN tidak dapat dibuat`);
+          return;
+        }
+
+        const category = String(row['Kategori Produk'] || row.Kategori || row.kategori_produk || 'Finish Good').trim();
+        const uom = String(row.UoM || row.UOM || row.uom || 'PCS').trim();
+        appState.masterBarang.push({ sku, nama: name, barcode, kategori_produk: category, uom });
+        existingSkus.add(sku.toLowerCase());
+        usedEans.add(barcode);
+        added++;
+      });
+
+      if (added) {
+        await saveData();
+        renderMasterDropdowns();
+        renderMasterBarangTabel(1);
+        renderBarangDropdownOptions();
+        renderLaporanStok(1);
+      }
+      const details = issues.length ? `\nDilewati: ${issues.slice(0, 5).join('; ')}${issues.length > 5 ? '; ...' : ''}` : '';
+      alert(`Import Master Barang selesai. Ditambahkan: ${added}, dilewati: ${skipped}.${details}`);
+    } catch (error) {
+      alert('File Excel tidak dapat dibaca. Pastikan formatnya sesuai template Master Barang.');
+    } finally {
+      fileInput.value = '';
+    }
+  };
+  reader.readAsArrayBuffer(file);
 }
 
 function uploadStokExcelBatch() {

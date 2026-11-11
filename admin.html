@@ -432,10 +432,12 @@
               <button class="btn-success" onclick="openModalTambahMasterBarang()">+ Tambah Master Barang Baru</button>
               <button data-feature="export" class="btn-info" onclick="downloadTemplateMasterBarang()">Download Template Excel</button>
               <button data-feature="export" class="btn-success" onclick="exportMasterBarangExcel()">Export Master Barang Excel</button>
+              <button data-feature="import" class="btn-primary" onclick="document.getElementById('importMasterBarangExcelFile').click()">Import Master Barang Excel</button>
+              <input data-feature="import" type="file" id="importMasterBarangExcelFile" accept=".xlsx, .xls" style="display:none" onchange="uploadMasterBarangExcel(event)">
             </div>
           </div>
           <div class="excel-upload-box" data-feature="import" style="margin-bottom:15px; padding:12px; background:#f8fafc; border:1px solid #cbd5e1; border-radius:6px;">
-            <b>Upload Initial Stock / Tambah Stok Barang via Excel</b>
+            <b>Upload Initial Stock / Tambah Stok Barang via Excel (tercatat di riwayat transaksi)</b>
             <div class="excel-upload-row" style="display:flex; gap:10px; margin-top:8px;">
               <input data-feature="import" type="file" id="importStokExcelFile" accept=".xlsx, .xls">
               <button data-feature="import" class="btn-primary" onclick="uploadStokExcelBatch()">Upload & Proses Stok Excel</button>
@@ -1283,7 +1285,7 @@
         <form onsubmit="tambahMasterBarang(event)">
           <div style="margin-bottom: 12px;"><label>Kode Barang / SKU</label><input type="text" id="mbSKU" placeholder="FG-OMD-LV1" required></div>
           <div style="margin-bottom: 12px;"><label>Nama Barang</label><input type="text" id="mbNama" placeholder="FG OMD LV1" required></div>
-          <div style="margin-bottom: 12px;"><label>Barcode / EAN-13 Code</label><input type="text" id="mbBarcode" placeholder="8993883610003"></div>
+          <div style="margin-bottom: 12px;"><label>Barcode / EAN-13 Code</label><input type="text" id="mbBarcode" placeholder="Kosongkan untuk generate otomatis"></div>
           <div style="margin-bottom: 15px;"><label>Kategori Produk</label><select id="mbKategoriProduk" style="width:100%; padding:8px;"></select></div>
           <div style="margin-bottom: 15px;"><label>Unit of Material (UoM)</label><select id="mbUom" style="width:100%; padding:8px;"></select></div>
           <div style="display:flex; justify-content:flex-end; gap:10px;">
@@ -1305,7 +1307,7 @@
           </div>
           <div class="form-row">
             <div><label for="setSkuKode">SKU Set (otomatis)</label><input type="text" id="setSkuKode" readonly></div>
-            <div><label for="setSkuBarcode">EAN Set</label><input type="text" id="setSkuBarcode" placeholder="Barcode unik untuk kemasan" required></div>
+            <div><label for="setSkuBarcode">EAN Set</label><input type="text" id="setSkuBarcode" placeholder="Kosongkan untuk generate otomatis"></div>
           </div>
           <div class="form-row">
             <div><label for="setSkuUom">UoM Set</label><select id="setSkuUom"></select></div>
@@ -1381,6 +1383,10 @@
         <div class="form-row">
           <div><label for="customBarcodeProduct">Alias SKU</label><select id="customBarcodeProduct" onchange="handleCustomBarcodeProductChange()"></select></div>
           <div><label for="customBarcodeLabel">Nama label / tujuan keluar</label><input id="customBarcodeLabel" type="text" placeholder="Contoh: Tujuan Keluar" oninput="handleCustomBarcodeLabelChange()"></div>
+        </div>
+        <div class="custom-barcode-batch-field">
+          <label for="customBarcodeBatchInput">Multi input barcode (satu barcode per baris)</label>
+          <textarea id="customBarcodeBatchInput" rows="4" placeholder="Tempel atau ketik beberapa barcode, satu per baris" oninput="updateCustomBarcodePreview()"></textarea>
         </div>
         <div class="sku-barcode-custom-head">
           <div><b>Komponen barcode custom</b><small>Nilai hanya berlaku untuk cetakan saat ini.</small></div>
